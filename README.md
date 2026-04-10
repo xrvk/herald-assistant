@@ -17,6 +17,9 @@ Runs as a Docker container alongside Ollama on a single machine.
 - "What's on my calendar this weekend?"
 - "Do I have any meetings before noon tomorrow?"
 - "When is my next free day?"
+- "What did I have yesterday?"
+- "Recap last week's meetings"
+- "How many meetings did I have last week?"
 
 ## Architecture
 
@@ -81,8 +84,12 @@ All config lives in a single `.env` file. See [.env.example](.env.example) for t
 | `WEEKEND_SCHEDULE` | `thu 16:00` | Weekend preview schedule (or `off`) |
 | `IGNORED_EVENTS` | *(none)* | Events to hide (comma-separated substrings) |
 | `CONTEXT_DAYS` | `7` | Days ahead the LLM sees |
+| `HISTORY_DAYS` | `10` | Days of past events available for history questions |
+| `HISTORY_CACHE_TTL` | `21600` | Past events cache duration in seconds (default 6h) |
 | `CACHE_TTL` | `3600` | Calendar cache duration in seconds |
 | `SYSTEM_PROMPT` | *(built-in)* | Override the LLM system prompt |
+
+> **Note on past events:** History questions (e.g. "what did I have yesterday?") are answered using past calendar data from your ICS feeds. The bot automatically detects when a question is about the past and includes historical context. Past event availability depends on your calendar provider — some providers prune past events from ICS feeds. The bot logs a warning at startup if a calendar returns no past events.
 
 ## Project Structure
 

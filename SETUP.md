@@ -181,7 +181,20 @@ Open `.env` in your editor. The file is self-documented with comments explaining
 3. **Notifications** — for scheduled digests (optional)
 4. **Ollama LLM** — endpoint and model
 
-Everything below those sections is optional with sensible defaults (timezone, digest schedules, work/personal labels, event filtering, LLM prompt, etc.). The comments in `.env.example` include examples and explain how each setting works.
+Everything below those sections is optional with sensible defaults (timezone, digest schedules, work/personal labels, event filtering, history, LLM prompt, etc.). The comments in `.env.example` include examples and explain how each setting works.
+
+### History (Past Events)
+
+The bot automatically detects when a question is about the past (e.g. "what did I have yesterday?", "recap last week") and includes historical calendar data in the LLM context. This is controlled by two variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `HISTORY_DAYS` | `10` | How many days of past events are available for history questions |
+| `HISTORY_CACHE_TTL` | `21600` (6h) | Cache duration for past events — longer than future since past rarely changes |
+
+Set `HISTORY_DAYS=0` to disable history entirely.
+
+> **Note:** Past event availability depends on your calendar provider. Some providers prune old events from ICS feeds. The bot logs a warning at startup if a calendar returns no past events — check `docker compose logs context-bot` to verify.
 
 > **Docker networking:** `host.docker.internal` (the default `OLLAMA_URL`) resolves to the host machine from inside a Docker container on macOS and Windows. On Linux, `docker-compose.yaml` includes an `extra_hosts` entry that maps it automatically. If running without Docker, change it to `http://localhost:11434`.
 

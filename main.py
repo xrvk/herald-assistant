@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 import time
 import requests
@@ -113,12 +114,17 @@ else:
 
 # ── LLM / prompt configuration ──
 CONTEXT_DAYS = int(os.getenv("CONTEXT_DAYS", "7"))
+HISTORY_DAYS = int(os.getenv("HISTORY_DAYS", "10"))
+HISTORY_CACHE_TTL = int(os.getenv("HISTORY_CACHE_TTL", "21600"))  # 6 hours
 SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", (
     "You are a helpful personal calendar assistant. You have access to the user's "
-    "upcoming calendar events from multiple calendars. Each event is prefixed with a "
+    "calendar events from multiple calendars. Each event is prefixed with a "
     "label in brackets (e.g. [Work], [Personal]). A legend at the top of the calendar "
     "data tells you which calendars are work vs personal. Use this to give context-aware "
     "answers — for example, distinguish between work meetings and personal plans. "
+    "When historical events are included, they appear under a PAST EVENTS section with "
+    "relative day markers (e.g. YESTERDAY, 3 DAYS AGO). Use these to answer questions "
+    "about what happened recently. "
     "Answer questions concisely and accurately. If asked about availability, check for "
     "gaps between events. Always reference specific dates and times."
 ))
@@ -211,24 +217,13 @@ def format_events_for_notification(events):
             lines.append(f"• {event.dt.strftime('%I:%M %p')}: {event.summary} {dur}".rstrip())
     return lines
 
-# Context cache: stores the full formatted calendar text
-_ctx_cache = {"text": None, "ts": 0, "days": None}
+# Context caches: separate past and future with different TTLs
+_future_ctx_cache = {"text": None, "ts": 0, "days": None}
+_past_ctx_cache = {"text": None, "ts": 0, "days": None}
+_history_verified = False
 
-def get_calendar_context(days_ahead=None):
-    """Build a structured text summary of upcoming events for LLM context."""
-    if days_ahead is None:
-        days_ahead = CONTEXT_DAYS
-
-    # Return cached context if still fresh and same days_ahead
-    now_ts = time.time()
-    if _ctx_cache["text"] and _ctx_cache["days"] == days_ahead and (now_ts - _ctx_cache["ts"]) < _CAL_CACHE_TTL:
-        return _ctx_cache["text"]
-
-    now = datetime.now(TZ)
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    end = (start + timedelta(days=days_ahead)).replace(hour=23, minute=59, second=59)
-
-    # Fetch all calendars in parallel
+def _fetch_all_calendars():
+    """Fetch all calendar data in parallel. Returns list of (label, Calendar)."""
     cal_data = []
     with ThreadPoolExecutor(max_workers=len(CALENDARS)) as pool:
         futures = [(label, pool.submit(fetch_events, url)) for label, url in CALENDARS]
@@ -236,22 +231,30 @@ def get_calendar_context(days_ahead=None):
             cal = future.result()
             if cal:
                 cal_data.append((label, cal))
+    return cal_data
 
+def _build_day_sections(cal_data, start, num_days, now):
+    """Build formatted sections for a range of days."""
     sections = []
-    for offset in range(days_ahead):
+    for offset in range(num_days):
         day_start = (start + timedelta(days=offset)).replace(hour=0, minute=0, second=0)
         day_end = day_start.replace(hour=23, minute=59, second=59)
         day_events = []
         for label, cal in cal_data:
             day_events += [Event(dt=e.dt, summary=f"[{label}] {e.summary}", duration_min=e.duration_min, all_day=e.all_day)
                            for e in get_upcoming_events(cal, day_start, day_end)]
-        day_events.sort(key=lambda x: (not x.all_day, x.dt))  # all-day first, then by time
+        day_events.sort(key=lambda x: (not x.all_day, x.dt))
 
-        label = day_start.strftime('%A, %B %d')
-        if day_start.date() == now.date():
-            label += " (TODAY)"
-        elif day_start.date() == (now + timedelta(days=1)).date():
-            label += " (TOMORROW)"
+        day_label = day_start.strftime('%A, %B %d')
+        delta_days = (now.date() - day_start.date()).days
+        if delta_days == 0:
+            day_label += " (TODAY)"
+        elif delta_days == -1:
+            day_label += " (TOMORROW)"
+        elif delta_days == 1:
+            day_label += " (YESTERDAY)"
+        elif delta_days > 1:
+            day_label += f" ({delta_days} DAYS AGO)"
 
         if day_events:
             lines = []
@@ -260,13 +263,73 @@ def get_calendar_context(days_ahead=None):
                     lines.append(f"  All Day - {e.summary}")
                 else:
                     lines.append(f"  {e.dt.strftime('%I:%M %p')} - {e.summary} {_format_duration(e.duration_min)}".rstrip())
-            sections.append(f"{label}:\n" + "\n".join(lines))
+            sections.append(f"{day_label}:\n" + "\n".join(lines))
         else:
-            sections.append(f"{label}:\n  No events")
+            sections.append(f"{day_label}:\n  No events")
+    return sections
 
+def get_future_context(days_ahead=None):
+    """Build a structured text summary of upcoming events for LLM context."""
+    if days_ahead is None:
+        days_ahead = CONTEXT_DAYS
+
+    now_ts = time.time()
+    if _future_ctx_cache["text"] and _future_ctx_cache["days"] == days_ahead and (now_ts - _future_ctx_cache["ts"]) < _CAL_CACHE_TTL:
+        return _future_ctx_cache["text"]
+
+    now = datetime.now(TZ)
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    cal_data = _fetch_all_calendars()
+    sections = _build_day_sections(cal_data, start, days_ahead, now)
+    result = "\n\n".join(sections)
+
+    _future_ctx_cache["text"] = result
+    _future_ctx_cache["ts"] = now_ts
+    _future_ctx_cache["days"] = days_ahead
+    return result
+
+def get_past_context(days_back=None):
+    """Build a structured text summary of past events for LLM context."""
+    global _history_verified
+    if days_back is None:
+        days_back = HISTORY_DAYS
+
+    now_ts = time.time()
+    if _past_ctx_cache["text"] and _past_ctx_cache["days"] == days_back and (now_ts - _past_ctx_cache["ts"]) < HISTORY_CACHE_TTL:
+        return _past_ctx_cache["text"]
+
+    now = datetime.now(TZ)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Past range: from (today - days_back) to yesterday 23:59
+    past_start = today_start - timedelta(days=days_back)
+
+    cal_data = _fetch_all_calendars()
+
+    # One-time verification: log how many past events each feed returns
+    if not _history_verified:
+        _history_verified = True
+        for label, cal in cal_data:
+            past_events = get_upcoming_events(cal, past_start, today_start - timedelta(seconds=1))
+            count = len(past_events)
+            if count == 0:
+                print(f"⚠ Calendar '{label}' returned no past events — history may not be available for this feed.")
+            else:
+                print(f"  Calendar '{label}': {count} past events in last {days_back} days")
+
+    sections = _build_day_sections(cal_data, past_start, days_back, now)
+    result = "\n\n".join(sections)
+
+    _past_ctx_cache["text"] = result
+    _past_ctx_cache["ts"] = now_ts
+    _past_ctx_cache["days"] = days_back
+    return result
+
+def build_context(include_past=False):
+    """Combine past and future context with headers and calendar legend."""
+    now = datetime.now(TZ)
     header = f"Current time: {now.strftime('%A, %B %d %Y at %I:%M %p')} ({TZ.key})"
 
-    # Calendar legend so LLM knows which labels are work vs personal
     legend_parts = []
     if _work_cals:
         legend_parts.append(f"Work calendars: {', '.join(_work_cals)}")
@@ -277,17 +340,98 @@ def get_calendar_context(days_ahead=None):
     parts = [header]
     if legend:
         parts.append(legend)
-    parts.append("\n\n".join(sections))
-    result = "\n\n".join(parts)
-    _ctx_cache["text"] = result
-    _ctx_cache["ts"] = now_ts
-    _ctx_cache["days"] = days_ahead
-    return result
+
+    if include_past:
+        past = get_past_context()
+        parts.append(f"── PAST EVENTS ──\n\n{past}")
+
+    future = get_future_context()
+    parts.append(f"── UPCOMING EVENTS ──\n\n{future}")
+
+    return "\n\n".join(parts)
+
+# ── Question classification ──
+
+# Patterns that indicate the user is asking about past events
+_PAST_PATTERNS = re.compile(
+    r"(?:"
+    r"last\s+(?:week|monday|tuesday|wednesday|thursday|friday|saturday|sunday|month|few\s+days)"
+    r"|yesterday"
+    r"|(?:did|was|were)\s+(?:I|there|we|my)"
+    r"|(?:what|how\s+many)\s+.*(?:happened|had|did|last|past|earlier|previous|ago)"
+    r"|\bago\b"
+    r"|\bpast\s+(?:week|few|couple|day)"
+    r"|\bearlier\s+(?:this\s+week|today)"
+    r"|\brecap\b|\breview\b|\bsummary\s+of\s+(?:last|this)\b"
+    r"|\bhow\s+(?:was|did)\b"
+    r"|\bthis\s+(?:past|morning)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+# Patterns that clearly indicate future-only questions
+_FUTURE_PATTERNS = re.compile(
+    r"(?:"
+    r"\btomorrow\b|\bnext\s+(?:week|monday|tuesday|wednesday|thursday|friday|saturday|sunday|month)"
+    r"|\bupcoming\b|\bschedule\b|\bwhat'?s\s+(?:on|coming|ahead|planned)"
+    r"|\bam\s+I\s+(?:free|busy|available)\b"
+    r"|\bdo\s+I\s+have\b"
+    r"|\bthis\s+(?:week|weekend)\b"
+    r"|\btonight\b|\blater\b"
+    r")",
+    re.IGNORECASE,
+)
+
+def classify_question(question):
+    """Classify whether a question needs past events, future events, or both.
+    
+    Returns 'past', 'future', or 'ambiguous'.
+    Tier 1: fast keyword regex. Tier 2: LLM fallback for ambiguous.
+    """
+    has_past = bool(_PAST_PATTERNS.search(question))
+    has_future = bool(_FUTURE_PATTERNS.search(question))
+
+    if has_past and not has_future:
+        return "past"
+    if has_future and not has_past:
+        return "future"
+    if has_past and has_future:
+        return "past"  # mixed signals → include history to be safe
+
+    # Tier 2: LLM fallback for ambiguous questions
+    try:
+        resp = requests.post(
+            f"{OLLAMA_URL}/api/chat",
+            json={
+                "model": OLLAMA_MODEL,
+                "messages": [
+                    {"role": "system", "content": (
+                        "Classify this question as needing 'past' calendar events, "
+                        "'future' calendar events, or 'both'. Respond with ONLY one word: "
+                        "past, future, or both."
+                    )},
+                    {"role": "user", "content": question},
+                ],
+                "stream": False,
+                "think": False,
+                "options": {"temperature": 0, "num_predict": 16, "num_ctx": 512},
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        answer = resp.json()["message"]["content"].strip().lower()
+        if "past" in answer or "both" in answer:
+            return "past"
+        return "future"
+    except Exception as e:
+        print(f"Classification fallback failed: {e}")
+        return "future"  # safe default
 
 # ── LLM ──
 
-def ask_llm(question, calendar_context):
+def ask_llm(question, calendar_context, include_past=False):
     """Send a question + calendar context to Ollama and return the response."""
+    num_ctx = 12288 if include_past else 8192
     system_prompt = f"{SYSTEM_PROMPT}\n\nCALENDAR DATA:\n{calendar_context}"
     try:
         resp = requests.post(
@@ -303,7 +447,7 @@ def ask_llm(question, calendar_context):
                 "options": {
                     "temperature": 0.3,
                     "num_predict": 512,
-                    "num_ctx": 8192,
+                    "num_ctx": num_ctx,
                 },
             },
             timeout=120,
@@ -462,9 +606,16 @@ async def on_message(message):
 
     print(f"[Chat] {message.author}: {question}")
     async with message.channel.typing():
+        # Classify whether the question needs past events (skip if history disabled)
+        include_past = False
+        if HISTORY_DAYS > 0:
+            classification = await asyncio.to_thread(classify_question, question)
+            include_past = classification == "past"
+            if include_past:
+                print(f"[Chat] Including past events (classification: {classification})")
         # Run blocking calendar fetch + LLM call in a thread
-        calendar_context = await asyncio.to_thread(get_calendar_context)
-        answer = await asyncio.to_thread(ask_llm, question, calendar_context)
+        calendar_context = await asyncio.to_thread(build_context, include_past)
+        answer = await asyncio.to_thread(ask_llm, question, calendar_context, include_past)
 
     print(f"[Chat] Reply ({len(answer)} chars): {answer[:100]}...")
     # Discord has a 2000 char limit
