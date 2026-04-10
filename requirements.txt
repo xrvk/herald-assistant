@@ -1,7 +1,6 @@
-requests
-icalendar
-recurring-ical-events
-pytz
-apprise
-apscheduler
-discord.py
+requests>=2.33,<3
+icalendar>=7.0,<8
+recurring-ical-events>=3.8,<4
+apprise>=1.9,<2
+apscheduler>=3.11,<4
+discord.py>=2.7,<3

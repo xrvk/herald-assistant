@@ -4,20 +4,31 @@ import time
 import requests
 from concurrent.futures import ThreadPoolExecutor
 from icalendar import Calendar
-from datetime import datetime, timedelta
-import pytz
+from datetime import datetime, date, timedelta
+from zoneinfo import ZoneInfo
+from typing import NamedTuple, Optional
 import apprise
 import discord
 import recurring_ical_events
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # Configuration
-TZ = pytz.timezone(os.getenv("TZ", "America/Los_Angeles"))
+TZ = ZoneInfo(os.getenv("TZ", "America/Los_Angeles"))
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 DISCORD_CHANNEL_ID = os.getenv("DISCORD_CHANNEL_ID")
+
+# Validate DISCORD_CHANNEL_ID is numeric if set
+if DISCORD_CHANNEL_ID and not DISCORD_CHANNEL_ID.strip().isdigit():
+    raise RuntimeError(f"DISCORD_CHANNEL_ID must be a numeric ID, got: {DISCORD_CHANNEL_ID!r}")
+if DISCORD_CHANNEL_ID:
+    DISCORD_CHANNEL_ID = DISCORD_CHANNEL_ID.strip()
+
+# Discord user allowlist (comma-separated user IDs). If set, only these users can interact.
+_allowed_raw = os.getenv("DISCORD_ALLOWED_USERS", "")
+DISCORD_ALLOWED_USERS = {int(uid.strip()) for uid in _allowed_raw.split(",") if uid.strip()} if _allowed_raw.strip() else set()
 
 # ── Calendar sources ──
 # Each calendar is a (label, url) tuple. Labels are used in the LLM context
@@ -114,6 +125,12 @@ SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", (
 
 # ── Calendar helpers ──
 
+class Event(NamedTuple):
+    dt: datetime
+    summary: str
+    duration_min: Optional[int]
+    all_day: bool = False
+
 # Calendar cache: avoids re-fetching ICS feeds on every message
 _cal_cache = {}       # url -> (Calendar, timestamp)
 _CAL_CACHE_TTL = int(os.getenv("CACHE_TTL", "3600"))  # seconds
@@ -130,7 +147,7 @@ def fetch_events(url):
         cal = Calendar.from_ical(response.text)
         _cal_cache[url] = (cal, now)
         return cal
-    except Exception as e:
+    except requests.RequestException as e:
         print(f"Error fetching calendar: {e}")
         # Return stale cache on error if available
         if cached:
@@ -147,28 +164,30 @@ def get_upcoming_events(calendar, start_date, end_date):
         if not dtstart:
             continue
         dt = dtstart.dt
-        if not isinstance(dt, datetime):
+        is_all_day = isinstance(dt, date) and not isinstance(dt, datetime)
+        if is_all_day:
             dt = datetime.combine(dt, datetime.min.time()).replace(tzinfo=TZ)
         else:
             dt = dt.astimezone(TZ)
-        summary = str(component.get("summary", "No Title"))
+        summary = str(component.get("summary", "No Title")).replace("\n", " ").replace("\r", " ")
         summary_lower = summary.lower()
         if IGNORED_EVENTS and any(ignored in summary_lower for ignored in IGNORED_EVENTS):
             continue
         # Calculate duration in minutes
         duration_min = None
-        dtend = component.get("dtend")
-        if dtend:
-            end_dt = dtend.dt
-            if not isinstance(end_dt, datetime):
-                end_dt = datetime.combine(end_dt, datetime.min.time()).replace(tzinfo=TZ)
-            else:
-                end_dt = end_dt.astimezone(TZ)
-            duration_min = int((end_dt - dt).total_seconds() / 60)
-        elif component.get("duration"):
-            duration_min = int(component.get("duration").dt.total_seconds() / 60)
-        events.append((dt, summary, duration_min))
-    return sorted(events, key=lambda x: x[0])
+        if not is_all_day:
+            dtend = component.get("dtend")
+            if dtend:
+                end_dt = dtend.dt
+                if not isinstance(end_dt, datetime):
+                    end_dt = datetime.combine(end_dt, datetime.min.time()).replace(tzinfo=TZ)
+                else:
+                    end_dt = end_dt.astimezone(TZ)
+                duration_min = int((end_dt - dt).total_seconds() / 60)
+            elif component.get("duration"):
+                duration_min = int(component.get("duration").dt.total_seconds() / 60)
+        events.append(Event(dt=dt, summary=summary, duration_min=duration_min, all_day=is_all_day))
+    return sorted(events, key=lambda x: x.dt)
 
 def _format_duration(minutes):
     """Format duration in minutes to a human-readable string."""
@@ -184,22 +203,25 @@ def _format_duration(minutes):
 def format_events_for_notification(events):
     """Format events as bullet list for Apprise notifications."""
     lines = []
-    for dt, summary, duration_min in events:
-        dur = _format_duration(duration_min)
-        lines.append(f"• {dt.strftime('%I:%M %p')}: {summary} {dur}".rstrip())
+    for event in events:
+        if event.all_day:
+            lines.append(f"• All Day: {event.summary}")
+        else:
+            dur = _format_duration(event.duration_min)
+            lines.append(f"• {event.dt.strftime('%I:%M %p')}: {event.summary} {dur}".rstrip())
     return lines
 
 # Context cache: stores the full formatted calendar text
-_ctx_cache = {"text": None, "ts": 0}
+_ctx_cache = {"text": None, "ts": 0, "days": None}
 
 def get_calendar_context(days_ahead=None):
     """Build a structured text summary of upcoming events for LLM context."""
     if days_ahead is None:
         days_ahead = CONTEXT_DAYS
 
-    # Return cached context if still fresh
+    # Return cached context if still fresh and same days_ahead
     now_ts = time.time()
-    if _ctx_cache["text"] and (now_ts - _ctx_cache["ts"]) < _CAL_CACHE_TTL:
+    if _ctx_cache["text"] and _ctx_cache["days"] == days_ahead and (now_ts - _ctx_cache["ts"]) < _CAL_CACHE_TTL:
         return _ctx_cache["text"]
 
     now = datetime.now(TZ)
@@ -221,8 +243,9 @@ def get_calendar_context(days_ahead=None):
         day_end = day_start.replace(hour=23, minute=59, second=59)
         day_events = []
         for label, cal in cal_data:
-            day_events += [(dt, f"[{label}] {s}", dur) for dt, s, dur in get_upcoming_events(cal, day_start, day_end)]
-        day_events.sort(key=lambda x: x[0])
+            day_events += [Event(dt=e.dt, summary=f"[{label}] {e.summary}", duration_min=e.duration_min, all_day=e.all_day)
+                           for e in get_upcoming_events(cal, day_start, day_end)]
+        day_events.sort(key=lambda x: (not x.all_day, x.dt))  # all-day first, then by time
 
         label = day_start.strftime('%A, %B %d')
         if day_start.date() == now.date():
@@ -231,12 +254,17 @@ def get_calendar_context(days_ahead=None):
             label += " (TOMORROW)"
 
         if day_events:
-            lines = [f"  {dt.strftime('%I:%M %p')} - {s} {_format_duration(dur)}".rstrip() for dt, s, dur in day_events]
+            lines = []
+            for e in day_events:
+                if e.all_day:
+                    lines.append(f"  All Day - {e.summary}")
+                else:
+                    lines.append(f"  {e.dt.strftime('%I:%M %p')} - {e.summary} {_format_duration(e.duration_min)}".rstrip())
             sections.append(f"{label}:\n" + "\n".join(lines))
         else:
             sections.append(f"{label}:\n  No events")
 
-    header = f"Current time: {now.strftime('%A, %B %d %Y at %I:%M %p')} ({TZ.zone})"
+    header = f"Current time: {now.strftime('%A, %B %d %Y at %I:%M %p')} ({TZ.key})"
 
     # Calendar legend so LLM knows which labels are work vs personal
     legend_parts = []
@@ -253,6 +281,7 @@ def get_calendar_context(days_ahead=None):
     result = "\n\n".join(parts)
     _ctx_cache["text"] = result
     _ctx_cache["ts"] = now_ts
+    _ctx_cache["days"] = days_ahead
     return result
 
 # ── LLM ──
@@ -286,7 +315,8 @@ def ask_llm(question, calendar_context):
     except requests.exceptions.Timeout:
         return "⏳ LLM timed out — the model may still be loading. Try again in a minute."
     except Exception as e:
-        return f"❌ LLM error: {e}"
+        print(f"LLM error: {e}")
+        return "❌ Something went wrong with the LLM. Check server logs."
 
 # ── Scheduled notifications ──
 
@@ -305,14 +335,16 @@ def send_work_update():
         if cal:
             all_events += get_upcoming_events(cal, tomorrow, end_of_tomorrow)
 
-    all_events.sort(key=lambda x: x[0])
+    all_events.sort(key=lambda x: x.dt)
     lines = format_events_for_notification(all_events)
     msg = "\n".join(lines) if lines else "No meetings tomorrow! 🎉"
 
-    apobj.notify(
+    result = apobj.notify(
         title=f"📅 Work Schedule for {tomorrow.strftime('%A, %b %d')}",
         body=msg,
     )
+    if not result:
+        print("Warning: Weeknight digest notification failed to send.")
 
 def send_weekend_update():
     """Triggered Thursday for weekend context."""
@@ -335,7 +367,7 @@ def send_weekend_update():
         day_events = []
         for label, cal in cal_data:
             day_events += get_upcoming_events(cal, day_start, day_end)
-        day_events = sorted(set(day_events), key=lambda x: x[0])
+        day_events = sorted(set(day_events), key=lambda x: x.dt)
         label = day_start.strftime("%A, %b %d")
         lines = format_events_for_notification(day_events)
         if lines:
@@ -345,10 +377,12 @@ def send_weekend_update():
 
     msg = "\n\n".join(sections)
 
-    apobj.notify(
+    result = apobj.notify(
         title="🚀 Weekend Preview (Fri-Sun)",
         body=msg,
     )
+    if not result:
+        print("Warning: Weekend preview notification failed to send.")
 
 # ── Discord bot ──
 
@@ -363,6 +397,15 @@ def _keep_model_alive():
     except Exception:
         pass
 
+async def _async_keep_model_alive():
+    await asyncio.to_thread(_keep_model_alive)
+
+async def _async_send_work_update():
+    await asyncio.to_thread(send_work_update)
+
+async def _async_send_weekend_update():
+    await asyncio.to_thread(send_weekend_update)
+
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
@@ -375,18 +418,20 @@ async def on_ready():
     global _scheduler_started, _ready_at
     _ready_at = datetime.now(TZ)
     print(f"Discord bot logged in as {client.user}")
+    if DISCORD_ALLOWED_USERS:
+        print(f"  Allowed users: {DISCORD_ALLOWED_USERS}")
     if not _scheduler_started:
         scheduler = AsyncIOScheduler(timezone=TZ)
         if _weeknight:
             days, h, m = _weeknight
-            scheduler.add_job(send_work_update, "cron", day_of_week=days, hour=h, minute=m)
+            scheduler.add_job(_async_send_work_update, "cron", day_of_week=days, hour=h, minute=m)
             print(f"  Weeknight digest: {days} at {h:02d}:{m:02d}")
         if _weekend:
             days, h, m = _weekend
-            scheduler.add_job(send_weekend_update, "cron", day_of_week=days, hour=h, minute=m)
+            scheduler.add_job(_async_send_weekend_update, "cron", day_of_week=days, hour=h, minute=m)
             print(f"  Weekend preview: {days} at {h:02d}:{m:02d}")
         # Keep the LLM model loaded in memory (ping every 4 minutes)
-        scheduler.add_job(_keep_model_alive, "interval", minutes=4)
+        scheduler.add_job(_async_keep_model_alive, "interval", minutes=4)
         scheduler.start()
         _scheduler_started = True
         print("Scheduler started.")
@@ -398,6 +443,10 @@ async def on_message(message):
 
     # Ignore messages sent before the bot connected
     if _ready_at and message.created_at.astimezone(TZ) < _ready_at:
+        return
+
+    # User allowlist check
+    if DISCORD_ALLOWED_USERS and message.author.id not in DISCORD_ALLOWED_USERS:
         return
 
     # Respond to DMs or messages in the designated channel
@@ -414,9 +463,8 @@ async def on_message(message):
     print(f"[Chat] {message.author}: {question}")
     async with message.channel.typing():
         # Run blocking calendar fetch + LLM call in a thread
-        loop = asyncio.get_event_loop()
-        calendar_context = await loop.run_in_executor(None, get_calendar_context)
-        answer = await loop.run_in_executor(None, ask_llm, question, calendar_context)
+        calendar_context = await asyncio.to_thread(get_calendar_context)
+        answer = await asyncio.to_thread(ask_llm, question, calendar_context)
 
     print(f"[Chat] Reply ({len(answer)} chars): {answer[:100]}...")
     # Discord has a 2000 char limit
@@ -432,11 +480,11 @@ async def run_scheduler_only():
     scheduler = AsyncIOScheduler(timezone=TZ)
     if _weeknight:
         days, h, m = _weeknight
-        scheduler.add_job(send_work_update, "cron", day_of_week=days, hour=h, minute=m)
+        scheduler.add_job(_async_send_work_update, "cron", day_of_week=days, hour=h, minute=m)
         print(f"  Weeknight digest: {days} at {h:02d}:{m:02d}")
     if _weekend:
         days, h, m = _weekend
-        scheduler.add_job(send_weekend_update, "cron", day_of_week=days, hour=h, minute=m)
+        scheduler.add_job(_async_send_weekend_update, "cron", day_of_week=days, hour=h, minute=m)
         print(f"  Weekend preview: {days} at {h:02d}:{m:02d}")
     scheduler.start()
     print("Context Bot Started. Scheduler running (no Discord chat).")
