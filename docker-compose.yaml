@@ -1,0 +1,10 @@
+version: '3.8'
+services:
+  context-bot:
+    build: .
+    container_name: context_bot
+    restart: always
+    env_file:
+      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
