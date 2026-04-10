@@ -105,3 +105,7 @@ Any ICS/iCal feed works — iCloud, Outlook 365, Google Calendar, or custom URLs
 ## Notification Targets
 
 Scheduled digests are sent via [Apprise](https://github.com/caronc/apprise/wiki), which supports Discord webhooks, Telegram, Slack, email, Pushover, and [90+ other services](https://github.com/caronc/apprise/wiki). See [SETUP.md](SETUP.md#4-set-up-notifications-optional) for setup.
+
+## License
+
+[AGPL-3.0](LICENSE)
