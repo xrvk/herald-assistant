@@ -822,11 +822,10 @@ async def on_message(message):
         parts = question.split(maxsplit=1)
         if len(parts) == 1:
             current = get_backend()
-            mark = lambda name: "▸" if name == current else " "
             await message.reply(
-                f"{mark('ollama')} **1.** ollama (`{OLLAMA_MODEL}`){' ← current' if current == 'ollama' else ''}\n"
-                f"{mark('gemini')} **2.** gemini (`{GEMINI_MODEL}`){' ← current' if current == 'gemini' else ''}\n"
-                f"Switch: `!backend 1` or `!backend 2`"
+                f"1. Ollama - model: {OLLAMA_MODEL}{' <-- Current' if current == 'ollama' else ''}\n"
+                f"2. Gemini - model: {GEMINI_MODEL}{' <-- Current' if current == 'gemini' else ''}\n\n"
+                "Switch with: !backend 1 or !backend 2"
             )
         else:
             target = _backend_map.get(parts[1].strip(), parts[1].strip().lower())
