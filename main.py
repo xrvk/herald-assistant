@@ -860,13 +860,13 @@ async def on_message(message):
     if question.lower().startswith("!llm"):
         parts = question.split(maxsplit=1)
         if len(parts) > 1:
-            await message.reply("Use `!switch g` for Gemini or `!switch o` for Ollama")
+            await message.reply("Use `.switch g` for Gemini or `.switch o` for Ollama")
             return
         current = get_backend()
         await message.reply(
             f"1. **Ollama** - model: `{OLLAMA_MODEL}`{' <-- **Current**' if current == 'ollama' else ''}\n"
             f"2. **Gemini** - model: `{GEMINI_MODEL}`{' <-- **Current**' if current == 'gemini' else ''}\n\n"
-            "Switch with: `!switch g` or `!switch o`"
+            "Switch with: `.switch g` or `.switch o`"
         )
         return
 
@@ -889,7 +889,7 @@ async def on_message(message):
         }
         target = switch_map.get(choice)
         if not target:
-            await message.reply("Invalid choice. Use `!switch g` or `!switch o`")
+            await message.reply("Invalid choice. Use `.switch g` or `.switch o`")
             return
 
         try:
@@ -993,7 +993,7 @@ async def on_message(message):
         # Sign the reply with the active model
         backend = get_backend()
         model_name = GEMINI_MODEL if backend == 'gemini' else OLLAMA_MODEL
-        signature = f"\n*— {backend.title()} ({model_name})*"
+        signature = f"\n*— {model_name}*"
         # Discord has a 2000 char limit; fit truncation + signature if needed
         if len(answer) + len(signature) > _DISCORD_MSG_LIMIT:
             trunc = "\n…(truncated)"
