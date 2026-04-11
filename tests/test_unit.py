@@ -47,6 +47,20 @@ def patch_env():
         yield
 
 
+# ── Standalone normalization helpers (mirror main.py logic) ──
+
+def _normalize_event(s: str) -> str:
+    """Lowercase, strip quotes and non-alphanumeric chars (keep spaces) for fuzzy matching."""
+    s = s.strip().strip('"').strip("'").lower()
+    return re.sub(r"[^\w\s]", "", s, flags=re.UNICODE).strip()
+
+def _parse_event_list(raw: str) -> list[str]:
+    """Parse a comma-separated event list, normalizing each entry."""
+    if not raw.strip():
+        return []
+    return [n for e in raw.split(",") if (n := _normalize_event(e))]
+
+
 # ── Helpers for building fake iCal components ──
 
 def _make_vevent(summary, dt_start, dt_end=None, all_day=False):
@@ -86,17 +100,16 @@ class TestIgnoredEvents:
     """Verify IGNORED_EVENTS filtering in get_upcoming_events."""
 
     def test_ignored_events_parsed(self):
-        """IGNORED_EVENTS env var is parsed into a list of lowercase substrings."""
+        """IGNORED_EVENTS env var is parsed into a list of normalized substrings."""
         with patch.dict(os.environ, _TEST_ENV):
-            # Re-parse the way main.py does
             raw = os.environ["IGNORED_EVENTS"]
-            parsed = [e.strip().lower() for e in raw.split(",") if e.strip()]
+            parsed = _parse_event_list(raw)
             assert "lunch" in parsed
             assert "canceled" in parsed
             assert "declined" in parsed
 
     def test_ignored_event_substring_match(self):
-        """Events with ignored substrings are filtered out."""
+        """Events with ignored substrings are filtered out (using normalized matching)."""
         ignored = ["lunch", "canceled", "declined"]
         test_events = [
             "Team Lunch Meeting",
@@ -105,7 +118,7 @@ class TestIgnoredEvents:
             "Sprint Planning",
             "Declined - All Hands",
         ]
-        kept = [e for e in test_events if not any(ig in e.lower() for ig in ignored)]
+        kept = [e for e in test_events if not any(ig in _normalize_event(e) for ig in ignored)]
         assert kept == ["Standup", "Sprint Planning"]
 
     def test_empty_ignore_list_keeps_all(self):
@@ -118,7 +131,7 @@ class TestIgnoredEvents:
     def test_ignored_events_audit(self):
         """Audit: print which events would be ignored by the configured list."""
         raw = _TEST_ENV["IGNORED_EVENTS"]
-        ignored = [e.strip().lower() for e in raw.split(",") if e.strip()]
+        ignored = _parse_event_list(raw)
 
         # Simulate a realistic calendar day
         sample_events = [
@@ -132,8 +145,8 @@ class TestIgnoredEvents:
             "Coffee Chat",
         ]
 
-        filtered_out = [e for e in sample_events if any(ig in e.lower() for ig in ignored)]
-        kept = [e for e in sample_events if not any(ig in e.lower() for ig in ignored)]
+        filtered_out = [e for e in sample_events if any(ig in _normalize_event(e) for ig in ignored)]
+        kept = [e for e in sample_events if not any(ig in _normalize_event(e) for ig in ignored)]
 
         print(f"\n  IGNORED_EVENTS config: {ignored}")
         print(f"  Sample events filtered OUT: {filtered_out}")
@@ -444,6 +457,89 @@ class TestScheduleParsing:
     def test_off(self):
         for val in ("off", "false", "disabled", "none", ""):
             assert self._parse_schedule(val, "mon", "08:00") is None
+
+
+# ── Event normalization ──
+
+class TestNormalizeEvent:
+    """Test _normalize_event helper for fuzzy event matching."""
+
+    def test_lowercase(self):
+        assert _normalize_event("Mom Babysit") == "mom babysit"
+
+    def test_strip_quotes(self):
+        assert _normalize_event('"Mom Babysit"') == "mom babysit"
+        assert _normalize_event("'Mom Babysit'") == "mom babysit"
+
+    def test_strip_special_chars(self):
+        assert _normalize_event("Mom's Appointment") == "moms appointment"
+        assert _normalize_event("Canceled: Design Review") == "canceled design review"
+        assert _normalize_event("Declined - Team Outing") == "declined  team outing"
+
+    def test_whitespace_trim(self):
+        assert _normalize_event("  lunch  ") == "lunch"
+
+    def test_empty(self):
+        assert _normalize_event("") == ""
+        assert _normalize_event("  ") == ""
+
+
+# ── NON_BLOCKING_EVENTS parsing ──
+
+class TestNonBlockingEvents:
+    """Test NON_BLOCKING_EVENTS env var parsing (same format as IGNORED_EVENTS)."""
+
+    def test_empty(self):
+        assert _parse_event_list("") == []
+        assert _parse_event_list("   ") == []
+
+    def test_single_entry(self):
+        assert _parse_event_list("Mom Babysit") == ["mom babysit"]
+
+    def test_multiple_entries(self):
+        assert _parse_event_list("Mom Babysit,Dog Walker") == ["mom babysit", "dog walker"]
+
+    def test_whitespace_stripping(self):
+        assert _parse_event_list("  Mom Babysit , Dog Walker  ") == ["mom babysit", "dog walker"]
+
+    def test_empty_entries_skipped(self):
+        assert _parse_event_list("Mom Babysit,,Dog Walker,") == ["mom babysit", "dog walker"]
+
+    def test_quoted_entries(self):
+        """Quotes around individual entries are stripped."""
+        assert _parse_event_list('"Mom Babysit","Dog Walker"') == ["mom babysit", "dog walker"]
+        assert _parse_event_list("'Mom Babysit','Dog Walker'") == ["mom babysit", "dog walker"]
+
+    def test_special_chars_stripped(self):
+        """Apostrophes, colons, etc. are removed during normalization."""
+        assert _parse_event_list("Mom's Appt") == ["moms appt"]
+        assert _parse_event_list("Canceled: Meeting") == ["canceled meeting"]
+
+
+class TestNonBlockingSystemPrompt:
+    """Test that NON_BLOCKING_EVENTS are injected into the system prompt."""
+
+    def test_prompt_appended(self):
+        non_blocking = ["mom babysit", "dog walker"]
+        base_prompt = "You are a helpful assistant."
+        nb_list = ", ".join(f'"{e}"' for e in non_blocking)
+        result = base_prompt + (
+            "\n\nNON-BLOCKING EVENTS: " + nb_list + ". "
+            "These events are informational and do NOT block the user's schedule. "
+            "When determining availability, ignore them."
+        )
+        assert "NON-BLOCKING EVENTS" in result
+        assert '"mom babysit"' in result
+        assert '"dog walker"' in result
+        assert "do NOT block" in result
+
+    def test_no_injection_when_empty(self):
+        non_blocking = []
+        base_prompt = "You are a helpful assistant."
+        result = base_prompt
+        if non_blocking:
+            result += "\n\nNON-BLOCKING EVENTS"
+        assert result == base_prompt
 
 
 # ── Standalone helper to avoid import side effects ──

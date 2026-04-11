@@ -2,6 +2,7 @@ import os
 import re
 import asyncio
 import time
+import unicodedata
 import requests
 from concurrent.futures import ThreadPoolExecutor
 from icalendar import Calendar
@@ -130,8 +131,26 @@ if _personal_cals:
     print(f"  Personal calendars: {', '.join(_personal_cals)}")
 
 # Events to ignore (case-insensitive substring match, comma-separated)
+# Entries are normalized: quotes stripped, special chars removed for fuzzy matching.
 _ignored_raw = os.getenv("IGNORED_EVENTS", "")
-IGNORED_EVENTS = [e.strip().lower() for e in _ignored_raw.split(",") if e.strip()] if _ignored_raw.strip() else []
+
+def _normalize_event(s: str) -> str:
+    """Lowercase, strip quotes and non-alphanumeric chars (keep spaces) for fuzzy matching."""
+    s = s.strip().strip('"').strip("'").lower()
+    return re.sub(r"[^\w\s]", "", s, flags=re.UNICODE).strip()
+
+def _parse_event_list(raw: str) -> list[str]:
+    """Parse a comma-separated event list, normalizing each entry."""
+    if not raw.strip():
+        return []
+    return [n for e in raw.split(",") if (n := _normalize_event(e))]
+
+IGNORED_EVENTS = _parse_event_list(_ignored_raw)
+
+# Non-blocking events: visible to the LLM but don't count as occupying the user's time
+# (case-insensitive substring match, comma-separated — same format as IGNORED_EVENTS)
+_nb_raw = os.getenv("NON_BLOCKING_EVENTS", "")
+NON_BLOCKING_EVENTS = _parse_event_list(_nb_raw)
 
 # ── Schedule configuration ──
 # Format: "days HH:MM" or "off" to disable
@@ -214,6 +233,12 @@ SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", (
     "gaps between events. Always reference specific dates and times."
 ))
 
+# All-day events and NON_BLOCKING_EVENTS are tagged (free) in calendar data
+SYSTEM_PROMPT += (
+    "\n\nEvents marked (free) do not block the user's time. "
+    "Treat them as if that time slot is open. Do not explain the (free) tag."
+)
+
 # ── Startup summary ──
 print("─" * 40)
 if DISCORD_BOT_TOKEN:
@@ -228,6 +253,8 @@ if HISTORY_DAYS > 0:
     print(f"  History: {HISTORY_DAYS} days back")
 else:
     print("  History: disabled")
+if NON_BLOCKING_EVENTS:
+    print(f"  Non-blocking events: {', '.join(NON_BLOCKING_EVENTS)}")
 if not DISCORD_BOT_TOKEN and not _schedules_enabled:
     print("  ⚠ Warning: No Discord bot token and no scheduled digests — nothing to do.")
     print("  Set DISCORD_BOT_TOKEN for chat, or enable schedules + APPRISE_URL for digests.")
@@ -289,8 +316,8 @@ def get_upcoming_events(calendar, start_date, end_date):
         else:
             dt = dt.astimezone(TZ)
         summary = str(component.get("summary", "No Title")).replace("\n", " ").replace("\r", " ")
-        summary_lower = summary.lower()
-        if IGNORED_EVENTS and any(ignored in summary_lower for ignored in IGNORED_EVENTS):
+        summary_norm = _normalize_event(summary)
+        if IGNORED_EVENTS and any(ignored in summary_norm for ignored in IGNORED_EVENTS):
             continue
         # Calculate duration in minutes
         duration_min = None
@@ -372,10 +399,12 @@ def _build_day_sections(cal_data, start, num_days, now):
         if day_events:
             lines = []
             for e in day_events:
+                is_nb = NON_BLOCKING_EVENTS and any(nb in _normalize_event(e.summary) for nb in NON_BLOCKING_EVENTS)
+                tag = " (free)" if e.all_day or is_nb else ""
                 if e.all_day:
-                    lines.append(f"  All Day - {e.summary}")
+                    lines.append(f"  All Day - {e.summary}{tag}")
                 else:
-                    lines.append(f"  {e.dt.strftime('%I:%M %p')} - {e.summary} {_format_duration(e.duration_min)}".rstrip())
+                    lines.append(f"  {e.dt.strftime('%I:%M %p')} - {e.summary}{tag} {_format_duration(e.duration_min)}".rstrip())
             sections.append(f"{day_label}:\n" + "\n".join(lines))
         else:
             sections.append(f"{day_label}:\n  No events")
