@@ -33,7 +33,11 @@ def _get_gemini_client():
     global _gemini_client
     if _gemini_client is None:
         if not _gemini_api_key:
-            raise RuntimeError("GEMINI_API_KEY is required for Gemini backend")
+            raise RuntimeError(
+                "GEMINI_API_KEY is required when LLM_BACKEND=gemini. "
+                "Get a free key at https://aistudio.google.com/app/apikey "
+                "or set LLM_BACKEND=ollama for local inference."
+            )
         from google import genai
         _gemini_client = genai.Client(api_key=_gemini_api_key)
     return _gemini_client
@@ -196,6 +200,25 @@ SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", (
     "gaps between events. Always reference specific dates and times."
 ))
 
+# ── Startup summary ──
+print("─" * 40)
+if DISCORD_BOT_TOKEN:
+    print(f"  Discord bot: enabled (channel {DISCORD_CHANNEL_ID})" if DISCORD_CHANNEL_ID else "  Discord bot: enabled (DMs only)")
+else:
+    print("  Discord bot: disabled (no DISCORD_BOT_TOKEN)")
+if _schedules_enabled:
+    print(f"  Notifications: enabled ({_apprise_url[:20]}...)" if len(_apprise_url) > 20 else f"  Notifications: enabled")
+else:
+    print("  Notifications: disabled (schedules off)")
+if HISTORY_DAYS > 0:
+    print(f"  History: {HISTORY_DAYS} days back")
+else:
+    print("  History: disabled")
+if not DISCORD_BOT_TOKEN and not _schedules_enabled:
+    print("  ⚠ Warning: No Discord bot token and no scheduled digests — nothing to do.")
+    print("  Set DISCORD_BOT_TOKEN for chat, or enable schedules + APPRISE_URL for digests.")
+print("─" * 40)
+
 # ── Calendar helpers ──
 
 class Event(NamedTuple):
@@ -217,6 +240,11 @@ def fetch_events(url):
     cached = _cal_cache.get(url)
     if cached and (now - cached[1]) < _CAL_CACHE_TTL:
         return cached[0]
+    # Demo URLs are in-memory only — refresh from generator if cache expired
+    if url.startswith("__demo_"):
+        if cached:
+            return cached[0]
+        return None
     cal_label = _cal_labels.get(url, "unknown")
     try:
         response = requests.get(url, timeout=30)
@@ -824,6 +852,10 @@ async def on_message(message):
         # Remove only the matching closing quote (if present) to preserve intent
         question = '!' + (rest[:-1] if rest.endswith(q) else rest)
 
+    # Accept . as command prefix (e.g., .switch, .llm, .cal)
+    if len(question) >= 2 and question[0] == '.' and question[1:].lstrip()[0:1].isalpha():
+        question = '!' + question[1:]
+
     # !llm command — show current LLM backend options
     if question.lower().startswith("!llm"):
         parts = question.split(maxsplit=1)
@@ -842,10 +874,10 @@ async def on_message(message):
     if question.lower().startswith("!switch"):
         parts = question.split(maxsplit=1)
         if len(parts) == 1:
-            await message.reply("Usage: `!switch g` (Gemini) or `!switch o` (Ollama)")
-            return
-
-        choice = parts[1].strip().lower()
+            # No argument: toggle to the other backend
+            choice = "ollama" if get_backend() == "gemini" else "gemini"
+        else:
+            choice = parts[1].strip().lower()
         switch_map = {
             "g": "gemini",
             "gemini": "gemini",
@@ -877,6 +909,61 @@ async def on_message(message):
         lines = [f"Connected calendars ({len(labels)}):"]
         lines.extend(f"{i}. **{label}**" for i, label in enumerate(labels, start=1))
         await message.reply("\n".join(lines))
+        return
+
+    # !demo command — switch to demo calendars (ignores real env calendars)
+    if question.lower().startswith("!demo"):
+        parts = question.split(maxsplit=1)
+        arg = parts[1].strip().lower() if len(parts) > 1 else ""
+
+        if arg == "off":
+            # Restore real calendars
+            if hasattr(on_message, "_real_calendars"):
+                CALENDARS.clear()
+                CALENDARS.extend(on_message._real_calendars)
+                del on_message._real_calendars
+                # Invalidate context caches
+                _future_ctx_cache["ts"] = 0
+                _past_ctx_cache["ts"] = 0
+                await message.reply("Demo mode **off** — restored real calendars.")
+                print("[Demo] Disabled — restored real calendars")
+            else:
+                await message.reply("Demo mode is not active.")
+            return
+
+        # Activate demo mode
+        from tests.demo_calendars import generate_work_ics, generate_personal_ics
+        if not hasattr(on_message, "_real_calendars"):
+            on_message._real_calendars = list(CALENDARS)
+
+        work_cal = generate_work_ics()
+        personal_cal = generate_personal_ics()
+        # Store parsed Calendar objects directly in _cal_cache with fake URLs
+        _demo_work_url = "__demo_work__"
+        _demo_personal_url = "__demo_personal__"
+        _cal_cache[_demo_work_url] = (work_cal, time.time())
+        _cal_cache[_demo_personal_url] = (personal_cal, time.time())
+
+        CALENDARS.clear()
+        CALENDARS.append(("Work", _demo_work_url))
+        CALENDARS.append(("Personal", _demo_personal_url))
+        _cal_labels[_demo_work_url] = "Work"
+        _cal_labels[_demo_personal_url] = "Personal"
+
+        # Invalidate context caches so next question uses demo data
+        _future_ctx_cache["ts"] = 0
+        _past_ctx_cache["ts"] = 0
+
+        from tests.demo_calendars import calendar_stats
+        w_stats = calendar_stats(work_cal)
+        p_stats = calendar_stats(personal_cal)
+        await message.reply(
+            f"**Demo mode ON** — using synthetic calendars\n"
+            f"📋 Work: {w_stats['total_events']} events\n"
+            f"📋 Personal: {p_stats['total_events']} events\n\n"
+            f"Your real calendars are saved. Use `!demo off` to restore them."
+        )
+        print(f"[Demo] Enabled — Work: {w_stats['total_events']} events, Personal: {p_stats['total_events']} events")
         return
 
     print(f"[Chat] {message.author}: {question}")

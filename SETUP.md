@@ -2,14 +2,14 @@
 
 Complete deployment instructions for Scout Report. The recommended approach is Docker — it handles dependencies, auto-restarts on reboot, and keeps your host clean. A local (non-Docker) option is also provided.
 
-> **Fastest path:** If you just want to try it out, use Gemini (no installs needed — just an API key). See [Step 4 Option B](#option-b-google-gemini-cloud--no-gpu-required).
+> **Fastest path:** Get a Gemini API key ([Step 4 Option A](#option-a-google-gemini-cloud--recommended)), set one calendar URL ([Step 1](#1-get-calendar-urls)), and deploy ([Step 6](#6-deploy)). Scheduled digests are off by default in `.env.example`, so you don't need `APPRISE_URL` to get started.
 
 ---
 
 ## Prerequisites
 
 - A machine to run the bot (Mac or Linux PC)
-- [Docker and Docker Compose](https://docs.docker.com/get-started/get-docker/) (recommended) or Python 3.10+
+- [Docker and Docker Compose](https://docs.docker.com/get-started/get-docker/) (recommended) or Python 3.11+
 - A Discord server you control
 - A free [Gemini API key](https://aistudio.google.com/app/apikey) (recommended) **or** [Ollama](https://ollama.com/) installed locally for private inference
 
@@ -25,6 +25,8 @@ Set at least one calendar. All three (plus extras) can be used simultaneously.
 2. Right-click a calendar → **Share Calendar** → check **Public Calendar**
 3. Copy the `webcal://` URL
 
+> **Tip:** You can paste the `webcal://` URL as-is — the bot automatically converts it to `https://`.
+
 ### Outlook 365
 
 1. Go to [Outlook Web](https://outlook.office365.com/calendar)
@@ -39,9 +41,22 @@ Set at least one calendar. All three (plus extras) can be used simultaneously.
 3. Scroll to **Integrate calendar**
 4. Copy the **Secret address in iCal format** (not the public one, unless the calendar is public)
 
-### Other ICS Feeds
+### Adding Calendars to `.env`
 
-Any standard ICS/iCal URL works. Set `CALENDAR_1_URL` and `CALENDAR_1_LABEL` in `.env` (up to 9 extra calendars).
+Use numbered slots — `CALENDAR_1_URL` + `CALENDAR_1_LABEL`, `CALENDAR_2_URL` + `CALENDAR_2_LABEL`, and so on. Any standard ICS/iCal URL works, from any provider, and you can add multiple calendars from the same service:
+
+```env
+CALENDAR_1_URL=https://calendar.google.com/calendar/ical/YOUR_ID/basic.ics
+CALENDAR_1_LABEL=Personal
+CALENDAR_2_URL=https://calendar.google.com/calendar/ical/ANOTHER_ID/basic.ics
+CALENDAR_2_LABEL=Family
+CALENDAR_3_URL=https://outlook.office365.com/owa/calendar/YOUR_ID/calendar.ics
+CALENDAR_3_LABEL=Work
+```
+
+Up to 9 numbered calendars are supported (`CALENDAR_1` through `CALENDAR_9`), plus 3 legacy shortcuts (`ICLOUD_URL`, `OUTLOOK_URL`, `GOOGLE_URL`) — 12 total. **Numbered slots are recommended** — they're more flexible and support multiple calendars from the same provider.
+
+Each calendar gets its own label, which the LLM uses to distinguish events by source. Labels are also used to decide which calendars count as "work" (see `WORK_LABELS`).
 
 ---
 
@@ -62,6 +77,8 @@ Any standard ICS/iCal URL works. Set `CALENDAR_1_URL` and `CALENDAR_1_LABEL` in 
 4. **Get the channel ID:**
    - Discord → User Settings → Advanced → enable **Developer Mode**
    - Right-click the channel you want the bot to listen in → **Copy Channel ID**
+5. **Get user IDs** (optional — for `DISCORD_ALLOWED_USERS`):
+   - With Developer Mode on, right-click a user → **Copy User ID**
 
 > **Important:** After adding the bot to your server, make sure it has permissions in your target channel. Right-click the channel → Edit Channel → Permissions → add the bot role → enable View Channel, Send Messages, and Read Message History.
 
@@ -69,18 +86,21 @@ Any standard ICS/iCal URL works. Set `CALENDAR_1_URL` and `CALENDAR_1_LABEL` in 
 
 ## 3. Set Up Notifications (optional)
 
-Scheduled digests (weeknight, weekend preview) are sent via [Apprise](https://github.com/caronc/apprise/wiki), which supports 90+ notification services. If you don't want scheduled digests, skip this step — set `WEEKNIGHT_SCHEDULE=off` and `WEEKEND_SCHEDULE=off` in `.env`.
+Scheduled digests (weeknight, weekend preview) are sent to a Discord channel via webhook. If you don't want scheduled digests, skip this step — set `WEEKNIGHT_SCHEDULE=off` and `WEEKEND_SCHEDULE=off` in `.env`.
 
 ### Discord Webhook
 
 1. In your Discord server, go to the channel for notifications
 2. Edit Channel → **Integrations** → **Webhooks** → **New Webhook**
 3. Copy the webhook URL — it looks like `https://discord.com/api/webhooks/123456/abcdef`
-4. Convert to Apprise format: `discord://123456/abcdef` (replace the `https://discord.com/api/webhooks/` prefix with `discord://`)
+4. Convert to Apprise format — replace the URL prefix:
+   ```
+   https://discord.com/api/webhooks/WEBHOOK_ID/WEBHOOK_TOKEN
+   →  discord://WEBHOOK_ID/WEBHOOK_TOKEN
+   ```
+   For example, if your webhook URL is `https://discord.com/api/webhooks/1234567890/ABCdef`, your Apprise URL is `discord://1234567890/ABCdef`.
 
-### Other Services
-
-Apprise supports Telegram, Slack, email, Pushover, and [many more](https://github.com/caronc/apprise/wiki). See the wiki for URL formats.
+> **Tip:** Under the hood, notifications use [Apprise](https://github.com/caronc/apprise/wiki), so `APPRISE_URL` also accepts Telegram, Slack, and [90+ other services](https://github.com/caronc/apprise/wiki) if you ever want to switch.
 
 ---
 
@@ -131,6 +151,8 @@ All models in the Gemma 4 family support text + image input, native system promp
 | `gemma4:31b` | 20 GB | ~24 GB | Slowest | Dense model, research use |
 
 > **Recommendation:** Start with **`gemma4:e4b`**. It's Google's edge-optimized model (4.5B effective parameters, 128K context) and responds in 5–15 seconds on an M2 Air. The `e2b` variant is viable on 8 GB machines but noticeably less capable. The `26b` MoE model is more accurate but takes 30–60 seconds per reply — too slow for chat.
+>
+> Other Ollama models work too (Llama, Mistral, etc.) — just set `OLLAMA_MODEL` to any model name. Gemma 4 is recommended for best results with this bot.
 
 #### Pull the Model
 
@@ -202,6 +224,21 @@ If you're using Gemini (the default), the only required LLM setting is `GEMINI_A
 
 Everything below the "Optional" divider has sensible defaults. Each variable has an inline comment explaining what it does.
 
+> **Important:** Set `TZ` to your [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (e.g., `Europe/London`, `Asia/Tokyo`). Default is `America/Los_Angeles`. This controls when scheduled digests fire and how times appear in the bot's answers.
+
+> **Minimum to start:** At least one calendar URL, a Gemini API key (or `LLM_BACKEND=ollama`), and a Discord bot token. Scheduled digests are off by default in `.env.example`. If you enable them, you'll also need `APPRISE_URL`.
+>
+> **Minimum viable `.env`:**
+> ```env
+> CALENDAR_1_URL=https://your-calendar-url.ics
+> CALENDAR_1_LABEL=Personal
+> GEMINI_API_KEY=your_api_key_here
+> DISCORD_BOT_TOKEN=your_token_here
+> TZ=America/New_York
+> ```
+>
+> The bot validates config at startup and will tell you what's missing.
+
 > **Note:** Past event availability (`HISTORY_DAYS`) depends on your calendar provider — some prune old events from ICS feeds. The bot logs a warning at startup if a calendar returns no past events.
 
 ---
@@ -211,6 +248,8 @@ Everything below the "Optional" divider has sensible defaults. Each variable has
 ### Option A: Docker (Recommended)
 
 Requires Docker and Docker Compose on the host machine. If using Ollama, it must be running on the same machine — the container reaches it via `host.docker.internal:11434`.
+
+> **Linux users:** The included `docker-compose.yaml` already maps `host.docker.internal` via `extra_hosts` — no extra setup needed.
 
 **Build and start:**
 
@@ -240,7 +279,7 @@ docker compose down
 
 ### Option B: Run Locally (no Docker)
 
-Requires Python 3.10+.
+Requires Python 3.11+.
 
 ```bash
 # Create virtual environment
@@ -251,7 +290,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # Load environment variables
-export $(grep -v '^#' .env | xargs)
+set -a && source .env && set +a
 
 # Start the bot
 python main.py
@@ -269,8 +308,25 @@ nohup python main.py > bot.log 2>&1 &
 
 1. **Check the bot is online:** It should appear as online in your Discord server
 2. **Send a test message:** Type a question in the configured channel or DM the bot
-3. **Expected response time:** 1–5 seconds with Gemini; 5–15 seconds with `gemma4:e4b` on Apple Silicon
-4. **Check scheduled jobs:** Look for the schedule summary in the bot's startup logs
+3. **Try bot commands:** `!cal` lists connected calendars, `!llm` shows the active backend, `!switch g` / `!switch o` switches between Gemini and Ollama
+4. **Expected response time:** 1–5 seconds with Gemini; 5–15 seconds with `gemma4:e4b` on Apple Silicon
+5. **Check scheduled jobs:** Look for the schedule summary in the bot's startup logs
+
+**Healthy startup logs look like:**
+
+```
+LLM backend: Gemini (gemini-2.5-flash)
+Loaded 1 calendar(s): Personal
+  Personal calendars: Personal
+────────────────────────────────────────
+  Discord bot: enabled (channel 123456789)
+  Notifications: disabled (schedules off)
+  History: 10 days back
+────────────────────────────────────────
+Starting Discord bot + scheduler...
+Discord bot logged in as ScoutReport#1234
+Scheduler started.
+```
 
 If the bot doesn't respond:
 - Check logs: `docker compose logs -f scout-report`
@@ -293,6 +349,7 @@ If the bot doesn't respond:
 | Missing recurring events | Ensure `recurring-ical-events` is installed (included in `requirements.txt`) |
 | Calendar URL not working | iCloud: must be a **public** calendar link. Outlook: must be the **ICS subscription** link. Google: use the **secret address in iCal format** |
 | Docker build fails | Run `docker compose build --no-cache` to rebuild from scratch |
+| Bot crashes on startup with "No calendar URLs configured" | Set at least one calendar: `CALENDAR_1_URL` in `.env`. See [Step 1](#1-get-calendar-urls) |
 
 ---
 
