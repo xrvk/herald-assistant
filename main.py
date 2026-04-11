@@ -235,8 +235,8 @@ SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", (
 
 # All-day events and NON_BLOCKING_EVENTS are tagged (free) in calendar data
 SYSTEM_PROMPT += (
-    "\n\nEvents marked (free) do not block the user's time. "
-    "Treat them as if that time slot is open. Do not explain the (free) tag."
+    "\n\nEvents marked (free) are informational — still mention them, "
+    "but they do not block the user's availability."
 )
 
 # ── Startup summary ──
