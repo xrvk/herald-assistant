@@ -1,6 +1,6 @@
 # Scout Report
 
-A personal calendar assistant that aggregates events from iCloud, Outlook, Google Calendar (or any ICS feed), sends scheduled notification summaries via Discord (powered by [Apprise](https://github.com/caronc/apprise)), and lets you ask natural language questions about your schedule via a Discord bot backed by an LLM — either local via [Ollama](https://ollama.com/) or cloud via [Google Gemini](https://ai.google.dev/gemini-api/docs).
+A personal calendar assistant that aggregates events from iCloud, Outlook, Google Calendar (or any ICS feed), sends scheduled notification summaries via Discord (powered by [Apprise](https://github.com/caronc/apprise)), and lets you ask natural language questions about your schedule via a Discord bot backed by an LLM — either cloud via [Google Gemini](https://ai.google.dev/gemini-api/docs) or local via [Ollama](https://ollama.com/).
 
 Runs as a Docker container with your choice of LLM backend.
 
@@ -10,7 +10,7 @@ Runs as a Docker container with your choice of LLM backend.
 |---|---|
 | **Weeknight digest** | Tomorrow's work events — configurable days/time (default Sun–Thu 8 PM) |
 | **Weekend preview** | Fri–Sun events grouped by day — configurable day/time (default Thu 4 PM) |
-| **Interactive chat** (Discord DM or channel) | Ask anything about your schedule — powered by Ollama or Gemini |
+| **Interactive chat** (Discord DM or channel) | Ask anything about your schedule — powered by Gemini or Ollama |
 
 **Example questions you can ask the bot:**
 - "Am I free Tuesday afternoon?"
@@ -35,21 +35,21 @@ Runs as a Docker container with your choice of LLM backend.
 │  └───────────┬─────────┬─────────┘  │
 │              │         │            │
 │              ▼         ▼            │
-│  ┌──────────────┐   ┌────────────┐  │
-│  │Ollama (local)│   │Gemini API  │  │
-│  │gemma4:e4b    │   │(cloud)     │  │
-│  └──────────────┘   └────────────┘  │
+│  ┌────────────┐   ┌──────────────┐  │
+│  │Gemini API  │   │Ollama (local)│  │
+│  │(cloud)     │   │gemma4:e4b    │  │
+│  └────────────┘   └──────────────┘  │
 └─────────────┬───────────────────────┘
               │
               ▼
          Discord API
 ```
 
-Set `LLM_BACKEND=ollama` (default) for local, privacy-preserving inference, or `LLM_BACKEND=gemini` for Google's cloud API (faster, no GPU required).
+Set `LLM_BACKEND=gemini` (default) for Google's cloud API (fast, free tier, no GPU required), or `LLM_BACKEND=ollama` for local, privacy-preserving inference.
 
 ## Setup
 
-See **[SETUP.md](SETUP.md)** for the full walkthrough — Ollama install, Discord bot creation, calendar URLs, configuration, deployment (Docker or local), and troubleshooting.
+See **[SETUP.md](SETUP.md)** for the full walkthrough — Discord bot creation, calendar URLs, Gemini API key, configuration, deployment (Docker or local), and troubleshooting.
 
 Running on a NAS with the LLM on a separate machine? See **[NAS-DUAL-SETUP.md](NAS-DUAL-SETUP.md)**.
 
@@ -57,7 +57,7 @@ Running on a NAS with the LLM on a separate machine? See **[NAS-DUAL-SETUP.md](N
 
 1. **Get your calendar URLs** (iCloud, Outlook, Google, or any ICS feed)
 2. **Create a Discord bot** and/or webhook for notifications
-3. **Choose an LLM backend** — install [Ollama](https://ollama.com/) locally or get a [Gemini API key](https://aistudio.google.com/app/apikey)
+3. **Get a [Gemini API key](https://aistudio.google.com/app/apikey)** (free, no GPU needed) — or [install Ollama](https://ollama.com/) if you prefer local inference
 4. **`cp .env.example .env`** and fill in your values
 5. **`docker compose up -d`** (or run locally with Python)
 
@@ -77,11 +77,11 @@ All config lives in a single `.env` file. See [.env.example](.env.example) for t
 
 | Variable | Default | Description |
 |---|---|---|
-| `LLM_BACKEND` | `ollama` | LLM provider: `ollama` (local) or `gemini` (cloud) |
-| `OLLAMA_URL` | `http://host.docker.internal:11434` | Ollama endpoint (when `LLM_BACKEND=ollama`) |
-| `OLLAMA_MODEL` | `gemma4:e4b` | Ollama model (when `LLM_BACKEND=ollama`) |
+| `LLM_BACKEND` | `gemini` | LLM provider: `gemini` (cloud) or `ollama` (local) |
 | `GEMINI_API_KEY` | *(none)* | Google Gemini API key (required when `LLM_BACKEND=gemini`) |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model (when `LLM_BACKEND=gemini`) |
+| `OLLAMA_URL` | `http://host.docker.internal:11434` | Ollama endpoint (when `LLM_BACKEND=ollama`) |
+| `OLLAMA_MODEL` | `gemma4:e4b` | Ollama model (when `LLM_BACKEND=ollama`) |
 | `TZ` | `America/Los_Angeles` | Timezone ([IANA format](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)) |
 | `ICLOUD_LABEL` / `OUTLOOK_LABEL` / `GOOGLE_LABEL` | `Personal` / `Work` / `Google` | Calendar labels (shown in LLM context) |
 | `WORK_LABELS` | `Work` | Which labels are work calendars (for digest + LLM) |
