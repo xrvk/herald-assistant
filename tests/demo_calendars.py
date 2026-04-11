@@ -1,5 +1,5 @@
 """
-Demo calendar generator for tests and !demo mode.
+Demo calendar generator for tests and .demo mode.
 
 Generates two realistic 7-day ICS calendars relative to any start date:
   - Work: busy developer (standups, 1:1s, sprint ceremonies, reviews)

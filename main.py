@@ -887,74 +887,40 @@ async def on_message(message):
     # Normalize smart quotes/punctuation that mobile keyboards may inject
     question = question.replace("\u201c", '"').replace("\u201d", '"').replace("\u2018", "'").replace("\u2019", "'")
 
-    # Strip wrapping quotes that mobile keyboards inject after ! (e.g., !"llm" → !llm)
-    # Only triggered when a quote immediately follows !, so commands with unquoted names are unaffected.
-    if len(question) >= 2 and question[0] == '!' and question[1] in '"\'':
+    # Strip wrapping quotes that mobile keyboards inject after . (e.g., ."llm" → .llm)
+    # Only triggered when a quote immediately follows ., so commands with unquoted names are unaffected.
+    if len(question) >= 2 and question[0] == '.' and question[1] in '"\'':
         q = question[1]  # the opening quote character
         rest = question[2:]
         # Remove only the matching closing quote (if present) to preserve intent
-        question = '!' + (rest[:-1] if rest.endswith(q) else rest)
+        question = '.' + (rest[:-1] if rest.endswith(q) else rest)
 
-    # Accept . as command prefix (e.g., .switch, .llm, .cal)
-    if len(question) >= 2 and question[0] == '.' and question[1:].lstrip()[0:1].isalpha():
-        question = '!' + question[1:]
-
-    # !llm command — show current LLM backend options
-    if question.lower().startswith("!llm"):
-        parts = question.split(maxsplit=1)
-        if len(parts) > 1:
-            await message.reply("Use `.switch g` for Gemini or `.switch o` for Ollama")
-            return
-        current = get_backend()
-        cur_gmodel = get_gemini_model()
-        ollama_marker = " <-- **Current**" if current == "ollama" else ""
-        gemini_rows = []
-        # Approximate free-tier limits as of Apr 2026; check ai.google.dev for latest.
-        model_info = [
-            ("gemini-2.5-flash-lite", "15 RPM, ~200ms TTFT"),
-            ("gemini-2.5-flash",      "10 RPM, ~300ms TTFT"),
-        ]
-        for m, info in model_info:
-            marker = " <-- **Current**" if (current == "gemini" and cur_gmodel == m) else ""
-            gemini_rows.append(f"   • `{m}` — {info}{marker}")
-        await message.reply(
-            f"1. **Ollama** — model: `{OLLAMA_MODEL}`{ollama_marker}\n"
-            f"2. **Gemini** models:\n"
-            + "\n".join(gemini_rows) + "\n\n"
-            "Switch with: `.switch o`, `.switch fl`, `.switch gf`"
-        )
-        return
-
-    # !switch command — switch LLM backend
-    if question.lower().startswith("!switch"):
+    # .llm command — show current LLM backend options / switch backend
+    if question.lower().startswith(".llm"):
         parts = question.split(maxsplit=1)
         if len(parts) == 1:
-            # No argument: cycle to next model in the ring
-            # ollama → flash-lite → flash → ollama
-            _cycle = [
-                ("ollama", None),
-                ("gemini", "gemini-2.5-flash-lite"),
-                ("gemini", "gemini-2.5-flash"),
+            # No argument: show backend info
+            current = get_backend()
+            cur_gmodel = get_gemini_model()
+            ollama_marker = " <-- **Current**" if current == "ollama" else ""
+            gemini_rows = []
+            # Approximate free-tier limits as of Apr 2026; check ai.google.dev for latest.
+            model_info = [
+                ("gemini-2.5-flash-lite", "15 RPM, ~200ms TTFT"),
+                ("gemini-2.5-flash",      "10 RPM, ~300ms TTFT"),
             ]
-            current = (get_backend(), get_gemini_model() if get_backend() == "gemini" else None)
-            idx = next((i for i, c in enumerate(_cycle) if c == current), 0)
-            target_backend, target_model = _cycle[(idx + 1) % len(_cycle)]
-            try:
-                set_backend(target_backend)
-                if target_model:
-                    set_gemini_model(target_model)
-                hist_key = (message.author.id if is_dm else message.channel.id, message.author.id)
-                _conv_history.pop(hist_key, None)
-                label = get_backend()
-                if get_backend() == "gemini":
-                    label = f"{label} ({get_gemini_model()})"
-                await message.reply(f"Switched to **{label}**")
-                print(f"[Backend] Switched to {get_backend()} ({get_gemini_model() if get_backend() == 'gemini' else OLLAMA_MODEL}) by {message.author}")
-            except (ValueError, RuntimeError) as e:
-                await message.reply(f"Failed: {e}")
+            for m, info in model_info:
+                marker = " <-- **Current**" if (current == "gemini" and cur_gmodel == m) else ""
+                gemini_rows.append(f"   • `{m}` — {info}{marker}")
+            await message.reply(
+                f"1. **Ollama** — model: `{OLLAMA_MODEL}`{ollama_marker}\n"
+                f"2. **Gemini** models:\n"
+                + "\n".join(gemini_rows) + "\n\n"
+                "Switch with: `.llm o`, `.llm fl`, `.llm gf`"
+            )
             return
-        else:
-            choice = parts[1].strip().lower()
+
+        choice = parts[1].strip().lower()
         switch_map = {
             "g":          ("gemini", None),
             "gemini":     ("gemini", None),
@@ -972,8 +938,8 @@ async def on_message(message):
         entry = switch_map.get(choice)
         if not entry:
             await message.reply(
-                "Invalid choice. Use `.switch fl` (flash-lite), "
-                "`.switch gf` (flash), or `.switch o` (ollama)"
+                "Invalid choice. Use `.llm fl` (flash-lite), "
+                "`.llm gf` (flash), or `.llm o` (ollama)"
             )
             return
 
@@ -994,16 +960,16 @@ async def on_message(message):
             await message.reply(f"Failed: {e}")
         return
 
-    # !cal command — list connected calendars
-    if question.lower().startswith("!cal"):
+    # .cal command — list connected calendars
+    if question.lower().startswith(".cal"):
         labels = [label for label, _ in CALENDARS]
         lines = [f"Connected calendars ({len(labels)}):"]
         lines.extend(f"{i}. **{label}**" for i, label in enumerate(labels, start=1))
         await message.reply("\n".join(lines))
         return
 
-    # !demo command — switch to demo calendars (ignores real env calendars)
-    if question.lower().startswith("!demo"):
+    # .demo command — switch to demo calendars (ignores real env calendars)
+    if question.lower().startswith(".demo"):
         parts = question.split(maxsplit=1)
         arg = parts[1].strip().lower() if len(parts) > 1 else ""
 
@@ -1065,7 +1031,7 @@ async def on_message(message):
             f"📋 Personal: {p_stats['total_events']} events\n"
             f"📋 Family: {f_stats['total_events']} events\n"
             f"📊 Total: {total} events (30 days of history + 60 days of future)\n\n"
-            f"Your real calendars are saved. Use `!demo off` to restore them."
+            f"Your real calendars are saved. Use `.demo off` to restore them."
         )
         print(f"[Demo] Enabled — Work: {w_stats['total_events']}, Personal: {p_stats['total_events']}, Family: {f_stats['total_events']} ({total} total)")
         return

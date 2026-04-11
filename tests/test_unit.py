@@ -394,9 +394,9 @@ class TestDiscordLimits:
 
     def test_smart_quote_normalization(self):
         """Mobile keyboards inject smart quotes around commands."""
-        q = "\u201c!llm\u201d"
+        q = "\u201c.llm\u201d"
         q = q.replace("\u201c", '"').replace("\u201d", '"').replace("\u2018", "'").replace("\u2019", "'")
-        assert q == '"!llm"'
+        assert q == '".llm"'
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
