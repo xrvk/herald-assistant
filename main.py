@@ -193,7 +193,8 @@ if _schedules_enabled:
     if _signal_configured:
         _signal_apprise_url = _build_signal_apprise_url(_signal_api_url, _signal_from, _signal_to)
         apobj.add(_signal_apprise_url)
-        print(f"Signal notifications enabled: {_mask_number(_signal_from)} → {_mask_number(_signal_to)} via {_signal_api_url}")
+        _signal_api_host = urlparse(_signal_api_url).netloc
+        print(f"Signal notifications enabled: {_mask_number(_signal_from)} → {_mask_number(_signal_to)} via {_signal_api_host}")
 else:
     apobj = None
 

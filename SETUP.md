@@ -108,7 +108,7 @@ SIGNAL_TO_NUMBER=+16665554321     # recipient phone number
 > ```bash
 > curl http://localhost:8080/v1/groups/+15555551234 | jq '.[].id'
 > ```
-> Then set `SIGNAL_TO_NUMBER=group.YourGroupId=`
+> Then set `SIGNAL_TO_NUMBER` to the group ID value, e.g. `group.YourGroupId=`
 
 **4. Restart the bot:**
 
