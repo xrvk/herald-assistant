@@ -11,7 +11,7 @@ Complete deployment instructions for Scout Report. The recommended approach is D
 - A machine to run the bot (Mac or Linux PC)
 - [Docker and Docker Compose](https://docs.docker.com/get-started/get-docker/) (recommended) or Python 3.10+
 - A Discord server you control
-- Either [Ollama](https://ollama.com/) installed locally **or** a free [Gemini API key](https://aistudio.google.com/app/apikey)
+- A free [Gemini API key](https://aistudio.google.com/app/apikey) (recommended) **or** [Ollama](https://ollama.com/) installed locally for private inference
 
 ---
 
@@ -88,7 +88,20 @@ Apprise supports Telegram, Slack, email, Pushover, and [many more](https://githu
 
 Choose **one** of the two options below:
 
-### Option A: Ollama (Local — Private, No Internet Required)
+### Option A: Google Gemini (Cloud — Recommended)
+
+No GPU, no local installs, no setup beyond an API key. The free tier is generous enough for personal use.
+
+1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey) and create an API key
+2. Set `GEMINI_API_KEY` in your `.env` — that's it. `LLM_BACKEND=gemini` is already the default.
+
+> **Free tier limits:** Gemini 2.5 Flash allows ~5 requests/minute on the free tier. For a personal calendar bot this is more than enough. The bot includes automatic retry with backoff for rate limits.
+>
+> **Privacy note:** Gemini sends your calendar data to Google's servers for processing. If privacy is a priority, use Ollama instead.
+
+---
+
+### Option B: Ollama (Local — Private, No Internet Required)
 
 Ollama runs on the **same machine** as the bot container. The Docker container reaches it via `host.docker.internal` (macOS/Windows) or a host-gateway alias (Linux).
 
@@ -173,16 +186,7 @@ curl http://localhost:11434/api/tags
 
 You should see a JSON response listing your model.
 
-### Option B: Google Gemini (Cloud — No GPU Required)
-
-If you don't want to run a local LLM, you can use Google's Gemini API instead. It's fast, free-tier friendly, and requires no GPU.
-
-1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey) and create an API key
-2. Save it — you'll set `LLM_BACKEND=gemini` and `GEMINI_API_KEY` in the next step
-
-> **Free tier limits:** Gemini 2.5 Flash allows ~5 requests/minute on the free tier. For a personal calendar bot this is more than enough. The bot includes automatic retry with backoff for rate limits.
->
-> **Privacy note:** Unlike Ollama, Gemini sends your calendar data to Google's servers for processing. If privacy is a priority, use Ollama instead.
+In `.env`, set `LLM_BACKEND=ollama` (overrides the `gemini` default).
 
 ---
 
@@ -193,6 +197,8 @@ cp .env.example .env
 ```
 
 Open `.env` in your editor and fill in the values you gathered from steps 1–4. The sections appear in the same order as the steps above — work through them top to bottom.
+
+If you're using Gemini (the default), the only required LLM setting is `GEMINI_API_KEY`. If you're using Ollama, also set `LLM_BACKEND=ollama`.
 
 Everything below the "Optional" divider has sensible defaults. Each variable has an inline comment explaining what it does.
 
@@ -263,13 +269,14 @@ nohup python main.py > bot.log 2>&1 &
 
 1. **Check the bot is online:** It should appear as online in your Discord server
 2. **Send a test message:** Type a question in the configured channel or DM the bot
-3. **Expected response time:** 5–15 seconds with `gemma4:e4b` on Apple Silicon
+3. **Expected response time:** 1–5 seconds with Gemini; 5–15 seconds with `gemma4:e4b` on Apple Silicon
 4. **Check scheduled jobs:** Look for the schedule summary in the bot's startup logs
 
 If the bot doesn't respond:
 - Check logs: `docker compose logs -f scout-report`
 - Verify the bot has channel permissions (View Channel, Send Messages, Read Message History)
-- Verify Ollama is reachable: `curl http://OLLAMA_IP:11434/api/tags`
+- If using Gemini, confirm `GEMINI_API_KEY` is set and valid
+- If using Ollama, verify Ollama is reachable: `curl http://OLLAMA_IP:11434/api/tags`
 - Make sure only **one** bot instance is running
 
 ---
@@ -279,8 +286,9 @@ If the bot doesn't respond:
 | Problem | Solution |
 |---|---|
 | Bot doesn't respond to messages | Check channel permissions — the bot needs View Channel, Send Messages, and Read Message History explicitly set |
-| LLM times out | Model may be cold-loading; try again in 30s. If persistent, switch to a smaller model (`gemma4:e2b`) |
-| LLM offline message | Ollama isn't running, Mac is asleep, or `OLLAMA_URL` is wrong. Run `curl http://IP:11434` to test |
+| Gemini rate limit error | Free tier is ~5 RPM; the bot retries automatically. If persistent, check your API key quota at [Google AI Studio](https://aistudio.google.com/app/apikey) |
+| LLM times out (Ollama) | Model may be cold-loading; try again in 30s. If persistent, switch to a smaller model (`gemma4:e2b`) |
+| LLM offline message (Ollama) | Ollama isn't running, Mac is asleep, or `OLLAMA_URL` is wrong. Run `curl http://IP:11434` to test |
 | Multiple replies to one message | Kill all bot processes and restart — only one instance should run at a time |
 | Missing recurring events | Ensure `recurring-ical-events` is installed (included in `requirements.txt`) |
 | Calendar URL not working | iCloud: must be a **public** calendar link. Outlook: must be the **ICS subscription** link. Google: use the **secret address in iCal format** |
