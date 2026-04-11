@@ -100,7 +100,7 @@ That's it for LLM config — no `OLLAMA_URL` needed.
 
 > **For Ollama on a MacBook instead**, see [Section 3](#3-optional-macbook-as-local-llm-ollama).
 
-All other variables (calendar URLs, Discord token, etc.) are the same as [SETUP.md](SETUP.md#5-configure).
+All other variables (calendar URLs, Discord token, etc.) are the same as [SETUP.md](SETUP.md#4-configure).
 
 ### Build and Start
 

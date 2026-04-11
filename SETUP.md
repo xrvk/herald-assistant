@@ -2,7 +2,7 @@
 
 Complete deployment instructions for Scout Report. The recommended approach is Docker — it handles dependencies, auto-restarts on reboot, and keeps your host clean. A local (non-Docker) option is also provided.
 
-> **Fastest path:** If you just want to try it out, use Gemini (no installs needed — just an API key). See [Step 4 Option B](#option-b-google-gemini-cloud--no-gpu-required).
+> **Fastest path:** If you just want to try it out, use Gemini (no installs needed — just an API key). See [Step 4 Option A](#option-a-google-gemini-cloud--recommended).
 
 ---
 
@@ -10,7 +10,7 @@ Complete deployment instructions for Scout Report. The recommended approach is D
 
 - A machine to run the bot (Mac or Linux PC)
 - [Docker and Docker Compose](https://docs.docker.com/get-started/get-docker/) (recommended) or Python 3.10+
-- A Discord server you control
+- At least one chat backend: a **Discord server** you control and/or a **Signal account** with the signal-cli sidecar
 - A free [Gemini API key](https://aistudio.google.com/app/apikey) (recommended) **or** [Ollama](https://ollama.com/) installed locally for private inference
 
 ---
@@ -45,7 +45,15 @@ Any standard ICS/iCal URL works. Set `CALENDAR_1_URL` and `CALENDAR_1_LABEL` in 
 
 ---
 
-## 2. Create a Discord Bot
+## 2. Set Up a Chat Backend (at least one)
+
+You need at least one chat backend for interactive Q&A. Discord and Signal work independently or together. Each section below covers both chat and notifications for that platform.
+
+Scheduled digests (weeknight, weekend preview) are sent via [Apprise](https://github.com/caronc/apprise/wiki). If you don't want scheduled digests, set `WEEKNIGHT_SCHEDULE=off` and `WEEKEND_SCHEDULE=off` in `.env`.
+
+### 2a. Discord (optional)
+
+#### Chat Bot
 
 1. Go to [discord.com/developers/applications](https://discord.com/developers/applications) → **New Application** → name it → **Create**
 2. **Bot** tab:
@@ -65,22 +73,20 @@ Any standard ICS/iCal URL works. Set `CALENDAR_1_URL` and `CALENDAR_1_LABEL` in 
 
 > **Important:** After adding the bot to your server, make sure it has permissions in your target channel. Right-click the channel → Edit Channel → Permissions → add the bot role → enable View Channel, Send Messages, and Read Message History.
 
----
+#### Notifications (optional)
 
-## 3. Set Up Notifications (optional)
-
-Scheduled digests (weeknight, weekend preview) are sent via [Apprise](https://github.com/caronc/apprise/wiki), which supports 90+ notification services. If you don't want scheduled digests, skip this step — set `WEEKNIGHT_SCHEDULE=off` and `WEEKEND_SCHEDULE=off` in `.env`.
-
-### Discord Webhook
+To also receive scheduled digests in Discord, create a webhook:
 
 1. In your Discord server, go to the channel for notifications
 2. Edit Channel → **Integrations** → **Webhooks** → **New Webhook**
 3. Copy the webhook URL — it looks like `https://discord.com/api/webhooks/123456/abcdef`
-4. Convert to Apprise format: `discord://123456/abcdef` (replace the `https://discord.com/api/webhooks/` prefix with `discord://`)
+4. Convert to Apprise format and set in `.env`: `APPRISE_URL=discord://123456/abcdef`
 
-### Signal
+### 2b. Signal (optional)
 
-Signal notifications are delivered via the [signal-cli REST API](https://github.com/bbernhard/signal-cli-rest-api), which runs as an optional sidecar container alongside the bot.
+Signal uses the [signal-cli REST API](https://github.com/bbernhard/signal-cli-rest-api), which runs as a sidecar container alongside the bot. The bot gets its own Signal number (`SIGNAL_FROM_NUMBER`), and only your phone number (`SIGNAL_TO_NUMBER`) is authorized to chat with it.
+
+Once configured, Signal handles both notifications and interactive chat — set `SIGNAL_CHAT=1` to enable chat, or omit it for notifications only.
 
 **1. Start the sidecar:**
 
@@ -88,9 +94,19 @@ Signal notifications are delivered via the [signal-cli REST API](https://github.
 docker compose --profile signal up -d signal-cli-rest-api
 ```
 
-**2. Register your phone number** by linking it as a device:
+**2. Register a phone number for the bot.** The bot needs its own Signal identity — a separate number from yours. Pick one of these methods:
 
-Open the following URL in your browser and scan the QR code with the Signal app on your phone (**Settings → Linked Devices → Add**):
+**Option A — Register a new number (recommended).** Use a spare number (Google Voice, Twilio, second SIM) that can receive one SMS:
+
+```bash
+# Request verification code
+curl -X POST "http://localhost:8080/v1/register/+1BOTNUMBER"
+
+# Enter the code you receive via SMS
+curl -X POST "http://localhost:8080/v1/register/+1BOTNUMBER/verify/CODE"
+```
+
+**Option B — Link as device.** If you have a second Signal account on another phone, you can link signal-cli to it. Open this URL and scan the QR code with that phone's Signal app (**Settings → Linked Devices → Add**):
 
 ```
 http://localhost:8080/v1/qrcodelink?device_name=scout-report
@@ -100,31 +116,27 @@ http://localhost:8080/v1/qrcodelink?device_name=scout-report
 
 ```
 SIGNAL_CLI_REST_API_URL=http://signal-cli-rest-api:8080
-SIGNAL_FROM_NUMBER=+15555551234   # your registered Signal number
-SIGNAL_TO_NUMBER=+16665554321     # recipient phone number
+SIGNAL_FROM_NUMBER=+1BOTNUMBER       # the bot's Signal number (from step 2)
+SIGNAL_TO_NUMBER=+1YOURNUMBER        # your personal phone number
+SIGNAL_CHAT=1                         # enables interactive DM chat (omit for notifications only)
 ```
 
-> **Sending to a group:** Retrieve your group ID first:
+> **`SIGNAL_FROM_NUMBER` and `SIGNAL_TO_NUMBER` must be different numbers.** FROM is the bot's identity; TO is yours. If they're the same, the bot would loop replying to itself.
+
+> **Sending notifications to a group:** Retrieve your group ID first:
 > ```bash
-> curl http://localhost:8080/v1/groups/+15555551234 | jq '.[].id'
+> curl http://localhost:8080/v1/groups/+1BOTNUMBER | jq '.[].id'
 > ```
 > Then set `SIGNAL_TO_NUMBER` to the group ID value, e.g. `group.YourGroupId=`
+> (Group messages are notification-only — the bot does not respond to group chats.)
 
-**4. Restart the bot:**
+### 2c. Other Notification Services (optional)
 
-```bash
-docker compose up -d --build
-```
-
-Signal and Discord notifications can be used simultaneously — both `APPRISE_URL` and the Signal variables are additive.
-
-### Other Services
-
-Apprise supports Telegram, Slack, email, Pushover, and [many more](https://github.com/caronc/apprise/wiki). See the wiki for URL formats.
+Apprise supports Telegram, Slack, email, Pushover, and [many more](https://github.com/caronc/apprise/wiki) via the `APPRISE_URL` variable. See the wiki for URL formats. These are notification-only — no interactive chat.
 
 ---
 
-## 4. Set Up Your LLM Backend
+## 3. Set Up Your LLM Backend
 
 Choose **one** of the two options below:
 
@@ -230,13 +242,13 @@ In `.env`, set `LLM_BACKEND=ollama` (overrides the `gemini` default).
 
 ---
 
-## 5. Configure
+## 4. Configure
 
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` in your editor and fill in the values you gathered from steps 1–4. The sections appear in the same order as the steps above — work through them top to bottom.
+Open `.env` in your editor and fill in the values you gathered from steps 1–3. The sections appear in the same order as the steps above — work through them top to bottom.
 
 If you're using Gemini (the default), the only required LLM setting is `GEMINI_API_KEY`. If you're using Ollama, also set `LLM_BACKEND=ollama`.
 
@@ -246,7 +258,7 @@ Everything below the "Optional" divider has sensible defaults. Each variable has
 
 ---
 
-## 6. Deploy
+## 5. Deploy
 
 ### Option A: Docker (Recommended)
 
@@ -305,12 +317,20 @@ nohup python main.py > bot.log 2>&1 &
 
 ---
 
-## 7. Verify Everything Works
+## 6. Verify Everything Works
+
+### Discord
 
 1. **Check the bot is online:** It should appear as online in your Discord server
 2. **Send a test message:** Type a question in the configured channel or DM the bot
 3. **Expected response time:** 1–5 seconds with Gemini; 5–15 seconds with `gemma4:e4b` on Apple Silicon
 4. **Check scheduled jobs:** Look for the schedule summary in the bot's startup logs
+
+### Signal
+
+1. **Check WebSocket connection:** Look for `Signal WebSocket connected` in the bot's startup logs
+2. **Send a test DM:** Send a message from the authorized phone number (`SIGNAL_TO_NUMBER`) to the bot's number (`SIGNAL_FROM_NUMBER`)
+3. **Expected behavior:** The bot should reply in the same DM thread within a few seconds
 
 If the bot doesn't respond:
 - Check logs: `docker compose logs -f scout-report`
@@ -326,6 +346,9 @@ If the bot doesn't respond:
 | Problem | Solution |
 |---|---|
 | Bot doesn't respond to messages | Check channel permissions — the bot needs View Channel, Send Messages, and Read Message History explicitly set |
+| Signal bot not connecting | Verify `SIGNAL_CHAT=1` is set, `SIGNAL_CLI_REST_API_URL` is reachable, and the sidecar is running (`docker compose --profile signal ps`) |
+| Signal bot ignores messages | Only `SIGNAL_TO_NUMBER` is authorized to chat. Group messages are ignored. Check the number matches exactly (including `+` and country code) |
+| Signal WebSocket keeps reconnecting | The sidecar may not be fully registered. Re-scan the QR code link and check `docker compose logs signal-cli-rest-api` |
 | Gemini rate limit error | Free tier is ~5 RPM; the bot retries automatically. If persistent, check your API key quota at [Google AI Studio](https://aistudio.google.com/app/apikey) |
 | LLM times out (Ollama) | Model may be cold-loading; try again in 30s. If persistent, switch to a smaller model (`gemma4:e2b`) |
 | LLM offline message (Ollama) | Ollama isn't running, Mac is asleep, or `OLLAMA_URL` is wrong. Run `curl http://IP:11434` to test |

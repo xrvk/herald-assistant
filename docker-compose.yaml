@@ -26,7 +26,7 @@ services:
 
   # ── Optional: Signal sidecar ──
   # Enables Signal notifications and interactive messaging via signal-cli REST API.
-  # See SETUP.md §3 for registration steps.
+  # See SETUP.md §2b for registration steps.
   #
   # Start with:  docker compose --profile signal up -d
   # Stop with:   docker compose --profile signal down

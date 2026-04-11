@@ -7,6 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 RUN useradd --create-home appuser
 
+COPY scout_report/ scout_report/
 COPY main.py .
 
 USER appuser

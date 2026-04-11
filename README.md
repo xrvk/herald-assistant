@@ -1,8 +1,8 @@
 # Scout Report
 
-A personal calendar assistant that aggregates events from iCloud, Outlook, Google Calendar (or any ICS feed), sends scheduled notification summaries via Discord (powered by [Apprise](https://github.com/caronc/apprise)), and lets you ask natural language questions about your schedule via a Discord bot backed by an LLM — either cloud via [Google Gemini](https://ai.google.dev/gemini-api/docs) or local via [Ollama](https://ollama.com/).
+A personal calendar assistant that aggregates events from iCloud, Outlook, Google Calendar (or any ICS feed), lets you ask natural language questions about your schedule via **Discord** and/or **Signal** interactive chat, and sends scheduled notification digests via [Apprise](https://github.com/caronc/apprise). Backed by an LLM — cloud via [Google Gemini](https://ai.google.dev/gemini-api/docs) or local via [Ollama](https://ollama.com/).
 
-Runs as a Docker container with your choice of LLM backend.
+Runs as a Docker container with your choice of LLM backend and chat platform.
 
 ## What It Does
 
@@ -10,7 +10,7 @@ Runs as a Docker container with your choice of LLM backend.
 |---|---|
 | **Weeknight digest** | Tomorrow's work events — configurable days/time (default Sun–Thu 8 PM) |
 | **Weekend preview** | Fri–Sun events grouped by day — configurable day/time (default Thu 4 PM) |
-| **Interactive chat** (Discord DM or channel) | Ask anything about your schedule — powered by Gemini or Ollama |
+| **Interactive chat** (Discord DM/channel or Signal DM) | Ask anything about your schedule — powered by Gemini or Ollama |
 
 **Example questions you can ask the bot:**
 - "Am I free Tuesday afternoon?"
@@ -24,29 +24,30 @@ Runs as a Docker container with your choice of LLM backend.
 ## Architecture
 
 ```
-┌─────────────────────────────────────┐
-│  Single Machine                     │
-│                                     │
-│  ┌───────────────────────────────┐  │
-│  │ Docker: scout-report          │  │
-│  │ - cron scheduler              │  │
-│  │ - discord bot                 │  │
-│  │ - calendar fetcher            │  │
-│  └───────────┬─────────┬─────────┘  │
-│              │         │            │
-│              ▼         ▼            │
-│  ┌────────────┐   ┌──────────────┐  │
-│  │Gemini API  │   │Ollama (local)│  │
-│  │(cloud)     │   │gemma4:e4b    │  │
-│  └────────────┘   └──────────────┘  │
-│                                     │
-│  ┌───────────────────────────────┐  │
-│  │ Docker: signal-cli-rest-api   │  │  ← optional (--profile signal)
-│  │ (Signal notification sidecar) │  │
-│  └───────────────────────────────┘  │
-└─────────────┬───────────────────────┘
-              │
-              ▼
+┌─────────────────────────────────────────┐
+│  Single Machine                         │
+│                                         │
+│  ┌───────────────────────────────────┐  │
+│  │ Docker: scout-report              │  │
+│  │ - cron scheduler                  │  │
+│  │ - discord bot (optional)          │  │
+│  │ - calendar fetcher                │  │
+│  └──────┬───────────┬────────────────┘  │
+│         │           │                   │
+│         ▼           ▼                   │
+│  ┌────────────┐ ┌──────────────┐        │
+│  │Gemini API  │ │Ollama (local)│        │
+│  │(cloud)     │ │gemma4:e4b    │        │
+│  └────────────┘ └──────────────┘        │
+│                                         │
+│  ┌───────────────────────────────────┐  │
+│  │ Docker: signal-cli-rest-api       │  │  ← optional (--profile signal)
+│  │ (Signal chat + notifications)     │  │
+│  └──────────┬────────────────────────┘  │
+│             │ ws:// receive + REST send  │
+└─────────┬───┴───────────────────────────┘
+          │
+          ▼
    Discord API / Signal
 ```
 
@@ -54,29 +55,30 @@ Set `LLM_BACKEND=gemini` (default) for Google's cloud API (fast, free tier, no G
 
 ## Setup
 
-See **[SETUP.md](SETUP.md)** for the full walkthrough — Discord bot creation, calendar URLs, Gemini API key, configuration, deployment (Docker or local), and troubleshooting.
+See **[SETUP.md](SETUP.md)** for the full walkthrough — chat backends (Discord/Signal), calendar URLs, Gemini API key, configuration, deployment (Docker or local), and troubleshooting.
 
 Running on a NAS with the LLM on a separate machine? See **[NAS-DUAL-SETUP.md](NAS-DUAL-SETUP.md)**.
 
 ### Overview
 
 1. **Get your calendar URLs** (iCloud, Outlook, Google, or any ICS feed)
-2. **Create a Discord bot** and/or webhook for notifications
+2. **Set up a chat backend** — Discord and/or Signal, including notifications
 3. **Get a [Gemini API key](https://aistudio.google.com/app/apikey)** (free, no GPU needed) — or [install Ollama](https://ollama.com/) if you prefer local inference
 4. **`cp .env.example .env`** and fill in your values
 5. **`docker compose up -d`** (or run locally with Python)
 
 ### Configuration
 
-All config lives in a single `.env` file. See [.env.example](.env.example) for the full reference with comments, or the [configuration section in SETUP.md](SETUP.md#5-configure) for details.
+All config lives in a single `.env` file. See [.env.example](.env.example) for the full reference with comments, or the [configuration section in SETUP.md](SETUP.md#4-configure) for details.
 
-**Required** (set at least one calendar + one of Discord bot or notifications):
+**Required** (set at least one calendar + at least one chat backend):
 
 | Variable | Description |
 |---|---|
 | `ICLOUD_URL` / `OUTLOOK_URL` / `GOOGLE_URL` | Calendar ICS URLs (at least one) |
-| `APPRISE_URL` | Notification target — required if scheduled digests are enabled |
-| `DISCORD_BOT_TOKEN` + `DISCORD_CHANNEL_ID` | For interactive LLM chat via Discord |
+| `DISCORD_BOT_TOKEN` + `DISCORD_CHANNEL_ID` | For interactive chat via Discord |
+| `SIGNAL_CLI_REST_API_URL` + `SIGNAL_FROM_NUMBER` + `SIGNAL_TO_NUMBER` + `SIGNAL_CHAT=1` | For interactive chat via Signal DMs (requires signal-cli sidecar) |
+| `APPRISE_URL` | Notification target for scheduled digests (optional) |
 
 **Optional** (sensible defaults built in):
 
@@ -104,14 +106,22 @@ All config lives in a single `.env` file. See [.env.example](.env.example) for t
 ## Project Structure
 
 ```
-├── main.py              # Scheduler + Discord bot + calendar fetch + LLM chat
-├── requirements.txt     # Python dependencies
-├── Dockerfile           # Container build definition
-├── docker-compose.yaml  # Deployment config (reads .env)
-├── .env                 # Your secrets (git-ignored)
-├── .env.example         # Template for .env
-├── SETUP.md             # Full setup & deployment guide
-├── NAS-DUAL-SETUP.md    # Dual-machine NAS + LLM host guide
+├── scout_report/         # Application package
+│   ├── config.py         #   Configuration, env var parsing, constants
+│   ├── calendar.py       #   Calendar fetching, caching, event parsing
+│   ├── llm.py            #   LLM backends (Gemini/Ollama), classification
+│   ├── notifications.py  #   Apprise setup, scheduled digests
+│   ├── chat.py           #   Shared chat pipeline (platform-agnostic)
+│   ├── discord_bot.py    #   Discord client
+│   └── signal_bot.py     #   Signal WebSocket client
+├── main.py               # Thin entry point
+├── requirements.txt      # Python dependencies
+├── Dockerfile            # Container build definition
+├── docker-compose.yaml   # Deployment config (reads .env)
+├── .env                  # Your secrets (git-ignored)
+├── .env.example          # Template for .env
+├── SETUP.md              # Full setup & deployment guide
+├── NAS-DUAL-SETUP.md     # Dual-machine NAS + LLM host guide
 └── .gitignore
 ```
 
@@ -119,11 +129,20 @@ All config lives in a single `.env` file. See [.env.example](.env.example) for t
 
 Any ICS/iCal feed works — iCloud, Outlook 365, Google Calendar, or custom URLs. See [SETUP.md](SETUP.md#1-get-calendar-urls) for instructions on getting each URL.
 
+## Signal
+
+Signal support has two modes, both powered by the [signal-cli REST API](https://github.com/bbernhard/signal-cli-rest-api) sidecar container (opt-in via `--profile signal` in `docker-compose.yaml`):
+
+| Mode | What it does | How to enable |
+|---|---|---|
+| **Notifications** | Receives scheduled digest summaries | Set `SIGNAL_CLI_REST_API_URL`, `SIGNAL_FROM_NUMBER`, `SIGNAL_TO_NUMBER` |
+| **Interactive chat** | Real-time DM Q&A (same as Discord chat) | Add `SIGNAL_CHAT=1` to the above |
+
+Signal and Discord work independently or together — you can run chat on one and notifications on the other, or both on both. See [SETUP.md](SETUP.md#2b-signal-optional) for the full walkthrough.
+
 ## Notification Targets
 
-Scheduled digests are sent via [Apprise](https://github.com/caronc/apprise/wiki), which supports Discord webhooks, Telegram, Slack, email, Pushover, **Signal**, and [90+ other services](https://github.com/caronc/apprise/wiki). See [SETUP.md](SETUP.md#3-set-up-notifications-optional) for setup.
-
-Signal notifications use the [signal-cli REST API](https://github.com/bbernhard/signal-cli-rest-api) sidecar container included in `docker-compose.yaml` (opt-in via `--profile signal`). Signal and Discord can be used at the same time — both targets receive every scheduled digest.
+Scheduled digests are sent via [Apprise](https://github.com/caronc/apprise/wiki), which supports Discord webhooks, Telegram, Slack, email, Pushover, Signal, and [90+ other services](https://github.com/caronc/apprise/wiki). See [SETUP.md](SETUP.md#2c-other-notification-services-optional) for setup.
 
 ## License
 
