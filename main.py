@@ -17,7 +17,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 TZ = ZoneInfo(os.getenv("TZ", "America/Los_Angeles"))
 
 # ── LLM Backend selection ──
-_llm_backend = os.getenv("LLM_BACKEND", "ollama").lower()
+_llm_backend = os.getenv("LLM_BACKEND", "gemini").lower()
 if _llm_backend not in ("ollama", "gemini"):
     raise RuntimeError(f"LLM_BACKEND must be 'ollama' or 'gemini', got: {_llm_backend!r}")
 
