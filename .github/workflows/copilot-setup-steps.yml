@@ -1,0 +1,36 @@
+name: "Copilot Setup Steps"
+
+# Run automatically when this file changes (validates the setup works),
+# and allow manual triggering from the Actions tab.
+on:
+    workflow_dispatch:
+    push:
+        paths:
+            - .github/workflows/copilot-setup-steps.yml
+    pull_request:
+        paths:
+            - .github/workflows/copilot-setup-steps.yml
+
+jobs:
+    # MUST be named `copilot-setup-steps` — Copilot picks this up automatically.
+    copilot-setup-steps:
+        runs-on: ubuntu-latest
+
+        permissions:
+            contents: read
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Set up Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.11"
+                  cache: "pip"
+
+            - name: Install dependencies
+              run: pip install -r requirements.txt pytest -q
+
+            - name: Verify unit tests pass
+              run: pytest tests/test_unit.py -v
