@@ -91,7 +91,7 @@ LLM_BACKEND=gemini
 GEMINI_API_KEY=your-api-key-here
 ```
 
-Get a free key from [Google AI Studio](https://aistudio.google.com/app/apikey). That's it — `GEMINI_MODEL` defaults to `gemini-2.5-flash-lite` and `LLM_BACKEND` defaults to `gemini`, so you only need the API key.
+Get a free key from [Google AI Studio](https://aistudio.google.com/app/apikey). That's it — `GEMINI_MODEL` defaults to `gemini-2.5-flash` and `LLM_BACKEND` defaults to `gemini`, so you only need the API key.
 
 #### Timezone
 
@@ -164,7 +164,7 @@ docker compose logs -f scout-report
 You should see:
 
 ```
-LLM backend: Gemini (gemini-2.5-flash-lite)
+LLM backend: Gemini (gemini-2.5-flash)
 Loaded 2 calendar(s): Personal, Work
   Personal calendars: Personal, Work
 ────────────────────────────────────────
