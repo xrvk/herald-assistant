@@ -2,14 +2,14 @@
 
 Complete deployment instructions for Scout Report. The recommended approach is Docker — it handles dependencies, auto-restarts on reboot, and keeps your host clean. A local (non-Docker) option is also provided.
 
-> **Fastest path:** Get a Gemini API key ([Step 4 Option A](#option-a-google-gemini-cloud--recommended)), set one calendar URL ([Step 1](#1-get-calendar-urls)), and deploy ([Step 6](#6-deploy)). Scheduled digests are off by default in `.env.example`, so you don't need `APPRISE_URL` to get started.
+> **Fastest path:** Get a Gemini API key ([Step 4 Option A](#option-a-google-gemini-cloud--recommended)), set one calendar URL ([Step 1](#1-get-calendar-urls)), set `DISCORD_BOT_TOKEN` ([Step 2](#2-create-a-discord-bot)), and deploy ([Step 6](#6-deploy)). Scheduled digests are off by default in `.env.example`, so you don't need `APPRISE_URL` to get started.
 
 ---
 
 ## Prerequisites
 
 - A machine to run the bot (Mac or Linux PC)
-- [Docker and Docker Compose](https://docs.docker.com/get-started/get-docker/) (recommended) or Python 3.11+
+- [Docker and Docker Compose](https://docs.docker.com/get-started/get-docker/) (recommended) or [Python 3.11+](https://www.python.org/downloads/) (for running without Docker)
 - A Discord server you control
 - A free [Gemini API key](https://aistudio.google.com/app/apikey) (recommended) **or** [Ollama](https://ollama.com/) installed locally for private inference
 
@@ -17,7 +17,7 @@ Complete deployment instructions for Scout Report. The recommended approach is D
 
 ## 1. Get Calendar URLs
 
-Set at least one calendar. All three (plus extras) can be used simultaneously.
+Set at least one calendar. Multiple calendars from any provider can be used simultaneously.
 
 ### iCloud
 
@@ -54,7 +54,7 @@ CALENDAR_3_URL=https://outlook.office365.com/owa/calendar/YOUR_ID/calendar.ics
 CALENDAR_3_LABEL=Work
 ```
 
-Up to 9 numbered calendars are supported (`CALENDAR_1` through `CALENDAR_9`), plus 3 legacy shortcuts (`ICLOUD_URL`, `OUTLOOK_URL`, `GOOGLE_URL`) — 12 total. **Numbered slots are recommended** — they're more flexible and support multiple calendars from the same provider.
+Up to 9 numbered calendars are supported (`CALENDAR_1` through `CALENDAR_9`).
 
 Each calendar gets its own label, which the LLM uses to distinguish events by source. Labels are also used to decide which calendars count as "work" (see `WORK_LABELS`).
 
@@ -101,6 +101,8 @@ Scheduled digests (weeknight, weekend preview) are sent to a Discord channel via
    For example, if your webhook URL is `https://discord.com/api/webhooks/1234567890/ABCdef`, your Apprise URL is `discord://1234567890/ABCdef`.
 
 > **Tip:** Under the hood, notifications use [Apprise](https://github.com/caronc/apprise/wiki), so `APPRISE_URL` also accepts Telegram, Slack, and [90+ other services](https://github.com/caronc/apprise/wiki) if you ever want to switch.
+>
+> **Note:** The bot doesn't validate the Apprise URL at startup. To test, temporarily set a schedule to fire soon, or check logs when the first digest runs.
 
 ---
 
@@ -222,7 +224,26 @@ Open `.env` in your editor and fill in the values you gathered from steps 1–4.
 
 If you're using Gemini (the default), the only required LLM setting is `GEMINI_API_KEY`. If you're using Ollama, also set `LLM_BACKEND=ollama`.
 
-Everything below the "Optional" divider has sensible defaults. Each variable has an inline comment explaining what it does.
+Everything below the "Optional" divider has sensible defaults. This table covers optional tuning settings. For required and conditional variables, see the corresponding setup steps above or the summary in README.md.
+
+Here's the full reference:
+
+| Variable | Default | Description |
+|---|---|---|
+| `TZ` | `America/Los_Angeles` | Timezone ([IANA format](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)) — controls digest timing and bot answers |
+| `WEEKNIGHT_SCHEDULE` | `off` | Weeknight digest schedule: `"days HH:MM"` or `off` |
+| `WEEKEND_SCHEDULE` | `off` | Weekend preview schedule: `"days HH:MM"` or `off` |
+| `WORK_LABELS` | *(not set)* | Comma-separated calendar labels treated as work (must match your `CALENDAR_N_LABEL` values). If empty, weeknight digests will show "No meetings" |
+| `IGNORED_EVENTS` | *(not set)* | Hide events from digests and LLM (comma-separated substrings, case-insensitive) |
+| `CONTEXT_DAYS` | `7` | Days of future events the LLM can see |
+| `HISTORY_DAYS` | `10` | Days of past events for history questions (`0` = off) |
+| `HISTORY_CACHE_TTL` | `21600` | Past events cache in seconds (6h) |
+| `CACHE_TTL` | `3600` | Calendar fetch cache in seconds (1h) |
+| `CONV_HISTORY_TURNS` | `3` | Q&A pairs kept per user for follow-up questions |
+| `CONV_HISTORY_TTL` | `1800` | Conversation staleness timeout in seconds (30 min) |
+| `CONV_HISTORY_CTX_BUMP` | `4096` | Extra context tokens when history overflows (Ollama only — no effect on Gemini) |
+| `SYSTEM_PROMPT` | *(built-in)* | Override the LLM personality (calendar data is appended automatically) |
+| `DISCORD_ALLOWED_USERS` | *(not set)* | Security: bot only responds to these Discord user IDs (comma-separated). If unset, all users can interact |
 
 > **Important:** Set `TZ` to your [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (e.g., `Europe/London`, `Asia/Tokyo`). Default is `America/Los_Angeles`. This controls when scheduled digests fire and how times appear in the bot's answers.
 
@@ -342,6 +363,7 @@ If the bot doesn't respond:
 | Problem | Solution |
 |---|---|
 | Bot doesn't respond to messages | Check channel permissions — the bot needs View Channel, Send Messages, and Read Message History explicitly set |
+| Bot starts but ignores messages | Verify `DISCORD_CHANNEL_ID` matches the actual channel (right-click channel → Copy Channel ID with Developer Mode enabled) |
 | Gemini rate limit error | Free tier is ~5 RPM; the bot retries automatically. If persistent, check your API key quota at [Google AI Studio](https://aistudio.google.com/app/apikey) |
 | LLM times out (Ollama) | Model may be cold-loading; try again in 30s. If persistent, switch to a smaller model (`gemma4:e2b`) |
 | LLM offline message (Ollama) | Ollama isn't running, Mac is asleep, or `OLLAMA_URL` is wrong. Run `curl http://IP:11434` to test |
