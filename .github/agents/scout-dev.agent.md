@@ -7,7 +7,7 @@ You are a Python developer specialized in this single-file Discord bot codebase.
 
 ## Codebase Facts
 
-- Everything lives in `main.py` (~950 lines). Do not split into modules unless explicitly asked.
+- Everything lives in `main.py` (~1040 lines). Do not split into modules unless explicitly asked.
 - Python 3.11 (Docker) / 3.13 (local). Type hints are used sparingly (only `NamedTuple`, `Optional`).
 - All config comes from env vars via `os.getenv()` with defaults. No dotenv — `.env` is loaded by Docker Compose or `export $(grep -v '^#' .env | xargs)`.
 - Dependencies: discord.py, APScheduler, Apprise, icalendar, recurring-ical-events, google-genai, requests. Do not introduce new dependencies without stating so.
@@ -29,7 +29,7 @@ You are a Python developer specialized in this single-file Discord bot codebase.
 
 ## Discord Command Pattern
 
-Commands use `!prefix` parsed manually in `on_message()` — not discord.py's commands framework. Follow this pattern:
+Commands use `!prefix` parsed manually in `on_message()` — not discord.py's commands framework. `.` is also accepted as prefix (normalized to `!` early in `on_message`). Follow this pattern:
 1. Check `question.lower().startswith("!command")`
 2. Parse args with `question.split(maxsplit=1)`
 3. `await message.reply(...)` for responses
@@ -50,7 +50,21 @@ Commands use `!prefix` parsed manually in `on_message()` — not discord.py's co
 
 ## Validation
 
-After any change, verify syntax: `python3 -c "import ast; ast.parse(open('main.py').read())"`
+After any change:
+1. Verify syntax: `python3 -c "import ast; ast.parse(open('main.py').read())"`
+2. Run unit tests: `pytest tests/test_unit.py -v`
+
+## Test Suite
+
+- `tests/test_unit.py` — 33 unit tests, no network needed. Patches env before importing `main`.
+- `tests/test_integration.py` — live integration tests against a running bot.
+- `tests/demo_calendars.py` — synthetic calendar generators used by `!demo` command and tests.
+- `run_tests.sh` — test runner (`./run_tests.sh` for unit, `--live` for integration).
+- When adding features, add corresponding tests to `test_unit.py`.
+
+## Demo Mode
+
+`!demo` command injects synthetic calendars from `tests/demo_calendars.py` into `_cal_cache` using `__demo_*` fake URLs. `fetch_events()` has a guard: `url.startswith("__demo_")` skips HTTP, returns cached data. Real calendars saved/restored via `on_message._real_calendars`.
 
 ## Constraints
 
