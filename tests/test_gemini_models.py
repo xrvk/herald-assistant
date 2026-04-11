@@ -143,8 +143,8 @@ def _benchmark_model(client, model_name, question, calendar_context):
     )
     contents = [types.Content(role="user", parts=[types.Part(text=question)])]
 
+    start = time.perf_counter()
     try:
-        start = time.perf_counter()
         resp = client.models.generate_content(
             model=model_name,
             contents=contents,
@@ -158,7 +158,6 @@ def _benchmark_model(client, model_name, question, calendar_context):
         text = resp.text or "(empty response)"
         return elapsed, text, None
     except Exception as e:
-        elapsed = time.perf_counter() - start
         return None, None, str(e)
 
 
