@@ -32,7 +32,7 @@ services:
   # Stop with:   docker compose --profile signal down
   #
   # After first launch, register your number by opening:
-  #   http://localhost:8080/v1/qrcodelink?device_name=herald
+  #   http://localhost:8080/v1/qrcodelink?device_name=scout-report
   # then scan the QR code in Signal app → Settings → Linked Devices → Add.
   signal-cli-rest-api:
     image: bbernhard/signal-cli-rest-api:latest

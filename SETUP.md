@@ -93,7 +93,7 @@ docker compose --profile signal up -d signal-cli-rest-api
 Open the following URL in your browser and scan the QR code with the Signal app on your phone (**Settings → Linked Devices → Add**):
 
 ```
-http://localhost:8080/v1/qrcodelink?device_name=herald
+http://localhost:8080/v1/qrcodelink?device_name=scout-report
 ```
 
 **3. Add Signal credentials to `.env`:**
