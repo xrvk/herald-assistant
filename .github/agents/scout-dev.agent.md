@@ -58,13 +58,13 @@ After any change:
 
 - `tests/test_unit.py` — 33 unit tests, no network needed. Patches env before importing `main`.
 - `tests/test_integration.py` — live integration tests against a running bot.
-- `tests/demo_calendars.py` — synthetic calendar generators used by `!demo` command and tests.
+- `tests/demo_calendars.py` — synthetic calendar generators used by `.demo` command and tests.
 - `run_tests.sh` — test runner (`./run_tests.sh` for unit, `--live` for integration).
 - When adding features, add corresponding tests to `test_unit.py`.
 
 ## Demo Mode
 
-`!demo` command injects synthetic calendars from `tests/demo_calendars.py` into `_cal_cache` using `__demo_*` fake URLs. `fetch_events()` has a guard: `url.startswith("__demo_")` skips HTTP, returns cached data. Real calendars saved/restored via `on_message._real_calendars`.
+`.demo` command injects synthetic calendars from `tests/demo_calendars.py` into `_cal_cache` using `__demo_*` fake URLs. `fetch_events()` has a guard: `url.startswith("__demo_")` skips HTTP, returns cached data. Real calendars saved/restored via `on_message._real_calendars`.
 
 ## Constraints
 
