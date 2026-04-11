@@ -816,7 +816,7 @@ async def on_message(message):
     # Normalize smart quotes/punctuation that mobile keyboards may inject
     question = question.replace("\u201c", '"').replace("\u201d", '"').replace("\u2018", "'").replace("\u2019", "'")
 
-    # Strip wrapping quotes that mobile keyboards inject after ! (e.g., !"backend" → !backend)
+    # Strip wrapping quotes that mobile keyboards inject after ! (e.g., !"llm" → !llm)
     # Only triggered when a quote immediately follows !, so commands with unquoted names are unaffected.
     if len(question) >= 2 and question[0] == '!' and question[1] in '"\'':
         q = question[1]  # the opening quote character
@@ -824,28 +824,59 @@ async def on_message(message):
         # Remove only the matching closing quote (if present) to preserve intent
         question = '!' + (rest[:-1] if rest.endswith(q) else rest)
 
-    # !backend command — show or switch LLM backend
-    _backend_map = {"1": "ollama", "2": "gemini"}
-    if question.lower().startswith("!backend"):
+    # !llm command — show current LLM backend options
+    if question.lower().startswith("!llm"):
+        parts = question.split(maxsplit=1)
+        if len(parts) > 1:
+            await message.reply("Use `!switch g` for Gemini or `!switch o` for Ollama")
+            return
+        current = get_backend()
+        await message.reply(
+            f"1. **Ollama** - model: `{OLLAMA_MODEL}`{' <-- **Current**' if current == 'ollama' else ''}\n"
+            f"2. **Gemini** - model: `{GEMINI_MODEL}`{' <-- **Current**' if current == 'gemini' else ''}\n\n"
+            "Switch with: `!switch g` or `!switch o`"
+        )
+        return
+
+    # !switch command — switch LLM backend
+    if question.lower().startswith("!switch"):
         parts = question.split(maxsplit=1)
         if len(parts) == 1:
-            current = get_backend()
-            await message.reply(
-                f"1. **Ollama** - model: `{OLLAMA_MODEL}`{' <-- Current' if current == 'ollama' else ''}\n"
-                f"2. **Gemini** - model: `{GEMINI_MODEL}`{' <-- Current' if current == 'gemini' else ''}\n\n"
-                "Switch with: `!backend 1` or `!backend 2`"
-            )
-        else:
-            target = _backend_map.get(parts[1].strip(), parts[1].strip().lower())
-            try:
-                set_backend(target)
-                # Clear conversation history on backend switch
-                hist_key = (message.author.id if is_dm else message.channel.id, message.author.id)
-                _conv_history.pop(hist_key, None)
-                await message.reply(f"Switched to **{get_backend()}**")
-                print(f"[Backend] Switched to {get_backend()} by {message.author}")
-            except (ValueError, RuntimeError) as e:
-                await message.reply(f"Failed: {e}")
+            await message.reply("Usage: `!switch g` (Gemini) or `!switch o` (Ollama)")
+            return
+
+        choice = parts[1].strip().lower()
+        switch_map = {
+            "g": "gemini",
+            "gemini": "gemini",
+            "o": "ollama",
+            "ollama": "ollama",
+            # Keep legacy numeric shortcuts for compatibility.
+            "1": "ollama",
+            "2": "gemini",
+        }
+        target = switch_map.get(choice)
+        if not target:
+            await message.reply("Invalid choice. Use `!switch g` or `!switch o`")
+            return
+
+        try:
+            set_backend(target)
+            # Clear conversation history on backend switch
+            hist_key = (message.author.id if is_dm else message.channel.id, message.author.id)
+            _conv_history.pop(hist_key, None)
+            await message.reply(f"Switched to **{get_backend()}**")
+            print(f"[Backend] Switched to {get_backend()} by {message.author}")
+        except (ValueError, RuntimeError) as e:
+            await message.reply(f"Failed: {e}")
+        return
+
+    # !cal command — list connected calendars
+    if question.lower().startswith("!cal"):
+        labels = [label for label, _ in CALENDARS]
+        lines = [f"Connected calendars ({len(labels)}):"]
+        lines.extend(f"{i}. **{label}**" for i, label in enumerate(labels, start=1))
+        await message.reply("\n".join(lines))
         return
 
     print(f"[Chat] {message.author}: {question}")
