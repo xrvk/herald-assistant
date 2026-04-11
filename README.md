@@ -93,6 +93,8 @@ All config lives in a single `.env` file — copy [.env.example](.env.example) a
 | `WEEKNIGHT_SCHEDULE` | `off` | Weeknight digest schedule: `"days HH:MM"` or `off` |
 | `WEEKEND_SCHEDULE` | `off` | Weekend preview schedule: `"days HH:MM"` or `off` |
 | `DISCORD_ALLOWED_USERS` | *(not set)* | Security: bot will only respond to these Discord user IDs (comma-separated). If unset, all users can interact |
+| `IGNORED_EVENTS` | *(not set)* | Hide events from digests and LLM (comma-separated substrings, case-insensitive). Quotes and special chars stripped for fuzzy matching |
+| `NON_BLOCKING_EVENTS` | *(not set)* | Events visible to LLM but don't block your availability (same format as `IGNORED_EVENTS`) |
 
 See [SETUP.md](SETUP.md#5-configure) and [.env.example](.env.example) for the full list of tuning options (calendar labels, event filtering, history settings, conversation memory, system prompt override, etc.).
 

@@ -234,7 +234,8 @@ Here's the full reference:
 | `WEEKNIGHT_SCHEDULE` | `off` | Weeknight digest schedule: `"days HH:MM"` or `off` |
 | `WEEKEND_SCHEDULE` | `off` | Weekend preview schedule: `"days HH:MM"` or `off` |
 | `WORK_LABELS` | *(not set)* | Comma-separated calendar labels treated as work (must match your `CALENDAR_N_LABEL` values). If empty, weeknight digests will show "No meetings" |
-| `IGNORED_EVENTS` | *(not set)* | Hide events from digests and LLM (comma-separated substrings, case-insensitive) |
+| `IGNORED_EVENTS` | *(not set)* | Hide events from digests and LLM. Comma-separated substrings, case-insensitive. Quotes and special characters are stripped automatically for fuzzy matching (e.g. `"Mom's Appt"` matches `Moms Appt`) |
+| `NON_BLOCKING_EVENTS` | *(not set)* | Events visible to the LLM but treated as informational — they don't block your availability. Same format as `IGNORED_EVENTS` |
 | `CONTEXT_DAYS` | `7` | Days of future events the LLM can see |
 | `HISTORY_DAYS` | `10` | Days of past events for history questions (`0` = off) |
 | `HISTORY_CACHE_TTL` | `21600` | Past events cache in seconds (6h) |
