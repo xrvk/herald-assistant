@@ -888,7 +888,7 @@ async def run_scheduler_only():
         scheduler.add_job(_async_send_weekend_update, "cron", day_of_week=days, hour=h, minute=m)
         print(f"  Weekend preview: {days} at {h:02d}:{m:02d}")
     scheduler.start()
-    print("Context Bot Started. Scheduler running (no Discord chat).")
+    print("Scout Report Started. Scheduler running (no Discord chat).")
     # Keep the loop alive
     while True:
         await asyncio.sleep(3600)

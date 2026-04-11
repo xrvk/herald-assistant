@@ -1,6 +1,6 @@
 # Setup Guide
 
-Complete deployment instructions for Personal Context Bot. The recommended approach is Docker — it handles dependencies, auto-restarts on reboot, and keeps your host clean. A local (non-Docker) option is also provided.
+Complete deployment instructions for Scout Report. The recommended approach is Docker — it handles dependencies, auto-restarts on reboot, and keeps your host clean. A local (non-Docker) option is also provided.
 
 > **Fastest path:** If you just want to try it out, use Gemini (no installs needed — just an API key). See [Step 4 Option B](#option-b-google-gemini-cloud--no-gpu-required).
 
@@ -215,7 +215,7 @@ docker compose up -d
 **Check logs:**
 
 ```bash
-docker compose logs -f context-bot
+docker compose logs -f scout-report
 ```
 
 **Restart after code changes:**
@@ -267,7 +267,7 @@ nohup python main.py > bot.log 2>&1 &
 4. **Check scheduled jobs:** Look for the schedule summary in the bot's startup logs
 
 If the bot doesn't respond:
-- Check logs: `docker compose logs -f context-bot`
+- Check logs: `docker compose logs -f scout-report`
 - Verify the bot has channel permissions (View Channel, Send Messages, Read Message History)
 - Verify Ollama is reachable: `curl http://OLLAMA_IP:11434/api/tags`
 - Make sure only **one** bot instance is running

@@ -1,4 +1,4 @@
-# Personal Context Bot
+# Scout Report
 
 A personal calendar assistant that aggregates events from iCloud, Outlook, Google Calendar (or any ICS feed), sends scheduled notification summaries via Discord (powered by [Apprise](https://github.com/caronc/apprise)), and lets you ask natural language questions about your schedule via a Discord bot backed by an LLM — either local via [Ollama](https://ollama.com/) or cloud via [Google Gemini](https://ai.google.dev/gemini-api/docs).
 
@@ -28,7 +28,7 @@ Runs as a Docker container with your choice of LLM backend.
 │  Single Machine                     │
 │                                     │
 │  ┌───────────────────────────────┐  │
-│  │ Docker: context-bot           │  │
+│  │ Docker: scout-report          │  │
 │  │ - cron scheduler              │  │
 │  │ - discord bot                 │  │
 │  │ - calendar fetcher            │  │

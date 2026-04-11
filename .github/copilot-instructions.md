@@ -1,4 +1,4 @@
-# Herald Assistant
+# Scout Report
 
 Single-file Python Discord bot (`main.py`). ICS calendar aggregation + LLM Q&A + scheduled digests. Docker-deployed.
 
@@ -22,7 +22,7 @@ Per-user/channel in-memory history (`_conv_history` dict of deques). `_get_histo
 ps aux | grep "[p]ython.*main.py"
 pkill -9 -f "python3 main.py" 2>/dev/null; pkill -9 -f "Python main.py" 2>/dev/null; sleep 1
 # Stop Docker container (uses restart: always, so stop not just kill)
-docker stop context_bot 2>/dev/null
+docker stop scout_report 2>/dev/null
 ```
 Multiple bot processes with the same Discord token = duplicate responses. `pkill` may miss other terminal sessions — verify with `ps aux`, use `kill -9 <PID>` on survivors. Docker container has `restart: always` so it auto-restarts after `docker kill` — use `docker stop` instead.
 

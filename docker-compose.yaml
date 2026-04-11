@@ -1,7 +1,7 @@
 services:
-  context-bot:
+  scout-report:
     build: .
-    container_name: context_bot
+    container_name: scout_report
     restart: always
     env_file:
       - .env
