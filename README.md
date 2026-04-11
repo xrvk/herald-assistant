@@ -1,8 +1,8 @@
 # Personal Context Bot
 
-A personal calendar assistant that aggregates events from iCloud, Outlook, Google Calendar (or any ICS feed), sends scheduled notification summaries via Discord (powered by [Apprise](https://github.com/caronc/apprise)), and lets you ask natural language questions about your schedule via a Discord bot backed by a local LLM ([Ollama](https://ollama.com/) + [Gemma 4](https://ai.google.dev/gemma/docs/core)).
+A personal calendar assistant that aggregates events from iCloud, Outlook, Google Calendar (or any ICS feed), sends scheduled notification summaries via Discord (powered by [Apprise](https://github.com/caronc/apprise)), and lets you ask natural language questions about your schedule via a Discord bot backed by an LLM — either local via [Ollama](https://ollama.com/) or cloud via [Google Gemini](https://ai.google.dev/gemini-api/docs).
 
-Runs as a Docker container alongside Ollama on a single machine.
+Runs as a Docker container with your choice of LLM backend.
 
 ## What It Does
 
@@ -10,13 +10,16 @@ Runs as a Docker container alongside Ollama on a single machine.
 |---|---|
 | **Weeknight digest** | Tomorrow's work events — configurable days/time (default Sun–Thu 8 PM) |
 | **Weekend preview** | Fri–Sun events grouped by day — configurable day/time (default Thu 4 PM) |
-| **Interactive chat** (Discord DM or channel) | Ask anything about your schedule — powered by Gemma 4 via Ollama |
+| **Interactive chat** (Discord DM or channel) | Ask anything about your schedule — powered by Ollama or Gemini |
 
 **Example questions you can ask the bot:**
 - "Am I free Tuesday afternoon?"
 - "What's on my calendar this weekend?"
 - "Do I have any meetings before noon tomorrow?"
 - "When is my next free day?"
+- "What did I have yesterday?"
+- "Recap last week's meetings"
+- "How many meetings did I have last week?"
 
 ## Architecture
 
@@ -25,22 +28,24 @@ Runs as a Docker container alongside Ollama on a single machine.
 │  Single Machine                     │
 │                                     │
 │  ┌───────────────────────────────┐  │
-│  │  Docker: context-bot           │  │
-│  │  - cron scheduler              │  │
-│  │  - discord bot                 │  │
-│  │  - calendar fetcher            │  │
-│  └───────────────┬───────────────┘  │
-│                │                    │
-│                ▼                    │
-│  ┌───────────────────────────────┐  │
-│  │  Ollama + gemma4:e4b           │  │
-│  │  (host.docker.internal:11434) │  │
-│  └───────────────────────────────┘  │
-└─────────────────┬───────────────────┘
-                  │
-                  ▼
-             Discord API
+│  │ Docker: context-bot           │  │
+│  │ - cron scheduler              │  │
+│  │ - discord bot                 │  │
+│  │ - calendar fetcher            │  │
+│  └───────────┬─────────┬─────────┘  │
+│              │         │            │
+│              ▼         ▼            │
+│  ┌──────────────┐   ┌────────────┐  │
+│  │Ollama (local)│   │Gemini API  │  │
+│  │gemma4:e4b    │   │(cloud)     │  │
+│  └──────────────┘   └────────────┘  │
+└─────────────┬───────────────────────┘
+              │
+              ▼
+         Discord API
 ```
+
+Set `LLM_BACKEND=ollama` (default) for local, privacy-preserving inference, or `LLM_BACKEND=gemini` for Google's cloud API (faster, no GPU required).
 
 ## Setup
 
@@ -50,9 +55,9 @@ Running on a NAS with the LLM on a separate machine? See **[NAS-DUAL-SETUP.md](N
 
 ### Overview
 
-1. **Install Ollama** and pull a model (runs on the host for GPU access)
+1. **Get your calendar URLs** (iCloud, Outlook, Google, or any ICS feed)
 2. **Create a Discord bot** and/or webhook for notifications
-3. **Get your calendar URLs** (iCloud, Outlook, Google, or any ICS feed)
+3. **Choose an LLM backend** — install [Ollama](https://ollama.com/) locally or get a [Gemini API key](https://aistudio.google.com/app/apikey)
 4. **`cp .env.example .env`** and fill in your values
 5. **`docker compose up -d`** (or run locally with Python)
 
@@ -72,8 +77,11 @@ All config lives in a single `.env` file. See [.env.example](.env.example) for t
 
 | Variable | Default | Description |
 |---|---|---|
-| `OLLAMA_URL` | `http://host.docker.internal:11434` | Ollama endpoint |
-| `OLLAMA_MODEL` | `gemma4:e4b` | Ollama model to use |
+| `LLM_BACKEND` | `ollama` | LLM provider: `ollama` (local) or `gemini` (cloud) |
+| `OLLAMA_URL` | `http://host.docker.internal:11434` | Ollama endpoint (when `LLM_BACKEND=ollama`) |
+| `OLLAMA_MODEL` | `gemma4:e4b` | Ollama model (when `LLM_BACKEND=ollama`) |
+| `GEMINI_API_KEY` | *(none)* | Google Gemini API key (required when `LLM_BACKEND=gemini`) |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model (when `LLM_BACKEND=gemini`) |
 | `TZ` | `America/Los_Angeles` | Timezone ([IANA format](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)) |
 | `ICLOUD_LABEL` / `OUTLOOK_LABEL` / `GOOGLE_LABEL` | `Personal` / `Work` / `Google` | Calendar labels (shown in LLM context) |
 | `WORK_LABELS` | `Work` | Which labels are work calendars (for digest + LLM) |
@@ -81,8 +89,12 @@ All config lives in a single `.env` file. See [.env.example](.env.example) for t
 | `WEEKEND_SCHEDULE` | `thu 16:00` | Weekend preview schedule (or `off`) |
 | `IGNORED_EVENTS` | *(none)* | Events to hide (comma-separated substrings) |
 | `CONTEXT_DAYS` | `7` | Days ahead the LLM sees |
+| `HISTORY_DAYS` | `10` | Days of past events available for history questions |
+| `HISTORY_CACHE_TTL` | `21600` | Past events cache duration in seconds (default 6h) |
 | `CACHE_TTL` | `3600` | Calendar cache duration in seconds |
 | `SYSTEM_PROMPT` | *(built-in)* | Override the LLM system prompt |
+
+> **Note on past events:** History questions (e.g. "what did I have yesterday?") are answered using past calendar data from your ICS feeds. The bot automatically detects when a question is about the past and includes historical context. Past event availability depends on your calendar provider — some providers prune past events from ICS feeds. The bot logs a warning at startup if a calendar returns no past events.
 
 ## Project Structure
 
@@ -100,11 +112,11 @@ All config lives in a single `.env` file. See [.env.example](.env.example) for t
 
 ## Calendar Sources
 
-Any ICS/iCal feed works — iCloud, Outlook 365, Google Calendar, or custom URLs. See [SETUP.md](SETUP.md#3-get-calendar-urls) for instructions on getting each URL.
+Any ICS/iCal feed works — iCloud, Outlook 365, Google Calendar, or custom URLs. See [SETUP.md](SETUP.md#1-get-calendar-urls) for instructions on getting each URL.
 
 ## Notification Targets
 
-Scheduled digests are sent via [Apprise](https://github.com/caronc/apprise/wiki), which supports Discord webhooks, Telegram, Slack, email, Pushover, and [90+ other services](https://github.com/caronc/apprise/wiki). See [SETUP.md](SETUP.md#4-set-up-notifications-optional) for setup.
+Scheduled digests are sent via [Apprise](https://github.com/caronc/apprise/wiki), which supports Discord webhooks, Telegram, Slack, email, Pushover, and [90+ other services](https://github.com/caronc/apprise/wiki). See [SETUP.md](SETUP.md#3-set-up-notifications-optional) for setup.
 
 ## License
 
