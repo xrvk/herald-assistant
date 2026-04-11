@@ -816,6 +816,14 @@ async def on_message(message):
     # Normalize smart quotes/punctuation that mobile keyboards may inject
     question = question.replace("\u201c", '"').replace("\u201d", '"').replace("\u2018", "'").replace("\u2019", "'")
 
+    # Strip wrapping quotes that mobile keyboards inject after ! (e.g., !"backend" → !backend)
+    # Only triggered when a quote immediately follows !, so commands with unquoted names are unaffected.
+    if len(question) >= 2 and question[0] == '!' and question[1] in '"\'':
+        q = question[1]  # the opening quote character
+        rest = question[2:]
+        # Remove only the matching closing quote (if present) to preserve intent
+        question = '!' + (rest[:-1] if rest.endswith(q) else rest)
+
     # !backend command — show or switch LLM backend
     _backend_map = {"1": "ollama", "2": "gemini"}
     if question.lower().startswith("!backend"):
@@ -860,13 +868,24 @@ async def on_message(message):
             calendar_context = await asyncio.to_thread(build_context, include_past)
             answer = await asyncio.to_thread(ask_backend, question, calendar_context, include_past, history)
 
-        # Store exchange for future follow-ups
+        # Store exchange for future follow-ups (without signature)
         _store_exchange(hist_chan, message.author.id, question, answer)
 
         print(f"[Chat] Reply ({len(answer)} chars): {answer[:100]}...")
-        # Discord has a 2000 char limit
-        if len(answer) > _DISCORD_MSG_LIMIT:
-            answer = answer[:_DISCORD_MSG_LIMIT] + "\n…(truncated)"
+        # Sign the reply with the active model
+        backend = get_backend()
+        model_name = GEMINI_MODEL if backend == 'gemini' else OLLAMA_MODEL
+        signature = f"\n*— {backend.title()} ({model_name})*"
+        # Discord has a 2000 char limit; fit truncation + signature if needed
+        if len(answer) + len(signature) > _DISCORD_MSG_LIMIT:
+            trunc = "\n…(truncated)"
+            overhead = len(trunc) + len(signature)
+            if overhead <= _DISCORD_MSG_LIMIT:
+                answer = answer[:_DISCORD_MSG_LIMIT - overhead] + trunc + signature
+            else:
+                answer = answer[:_DISCORD_MSG_LIMIT]
+        else:
+            answer += signature
 
         await message.reply(answer)
     except Exception as e:
