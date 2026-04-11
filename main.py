@@ -978,7 +978,8 @@ async def on_message(message):
         parts = question.split(maxsplit=1)
         arg = parts[1].strip().lower() if len(parts) > 1 else ""
 
-        if arg == "off":
+        # Toggle off if already active (no arg) or explicit "off"
+        if arg == "off" or (arg == "" and hasattr(on_message, "_real_calendars")):
             # Restore real calendars
             if hasattr(on_message, "_real_calendars"):
                 CALENDARS.clear()
