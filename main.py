@@ -993,39 +993,51 @@ async def on_message(message):
                 await message.reply("Demo mode is not active.")
             return
 
-        # Activate demo mode
-        from tests.demo_calendars import generate_work_ics, generate_personal_ics
+        # Activate demo mode — use 90-day benchmark calendars from demo/
+        from demo.calendars import (
+            generate_work_calendar, generate_personal_calendar,
+            generate_family_calendar, calendar_stats,
+        )
         if not hasattr(on_message, "_real_calendars"):
             on_message._real_calendars = list(CALENDARS)
 
-        work_cal = generate_work_ics()
-        personal_cal = generate_personal_ics()
+        work_cal = generate_work_calendar()
+        personal_cal = generate_personal_calendar()
+        family_cal = generate_family_calendar()
+
         # Store parsed Calendar objects directly in _cal_cache with fake URLs
         _demo_work_url = "__demo_work__"
         _demo_personal_url = "__demo_personal__"
+        _demo_family_url = "__demo_family__"
         _cal_cache[_demo_work_url] = (work_cal, time.time())
         _cal_cache[_demo_personal_url] = (personal_cal, time.time())
+        _cal_cache[_demo_family_url] = (family_cal, time.time())
 
         CALENDARS.clear()
         CALENDARS.append(("Work", _demo_work_url))
         CALENDARS.append(("Personal", _demo_personal_url))
+        CALENDARS.append(("Family", _demo_family_url))
         _cal_labels[_demo_work_url] = "Work"
         _cal_labels[_demo_personal_url] = "Personal"
+        _cal_labels[_demo_family_url] = "Family"
 
         # Invalidate context caches so next question uses demo data
         _future_ctx_cache["ts"] = 0
         _past_ctx_cache["ts"] = 0
 
-        from tests.demo_calendars import calendar_stats
         w_stats = calendar_stats(work_cal)
         p_stats = calendar_stats(personal_cal)
+        f_stats = calendar_stats(family_cal)
+        total = w_stats['total_events'] + p_stats['total_events'] + f_stats['total_events']
         await message.reply(
-            f"**Demo mode ON** — using synthetic calendars\n"
+            f"**Demo mode ON** — using 90-day benchmark calendars\n"
             f"📋 Work: {w_stats['total_events']} events\n"
-            f"📋 Personal: {p_stats['total_events']} events\n\n"
+            f"📋 Personal: {p_stats['total_events']} events\n"
+            f"📋 Family: {f_stats['total_events']} events\n"
+            f"📊 Total: {total} events (30 days of history + 60 days of future)\n\n"
             f"Your real calendars are saved. Use `!demo off` to restore them."
         )
-        print(f"[Demo] Enabled — Work: {w_stats['total_events']} events, Personal: {p_stats['total_events']} events")
+        print(f"[Demo] Enabled — Work: {w_stats['total_events']}, Personal: {p_stats['total_events']}, Family: {f_stats['total_events']} ({total} total)")
         return
 
     print(f"[Chat] {message.author}: {question}")
