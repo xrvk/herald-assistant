@@ -1,8 +1,8 @@
 # NAS Deployment Guide
 
-Deployment guide for running the bot container 24/7 on a **Synology NAS**.
+Deployment guide for running the bot container 24/7 on a **Synology NAS** (DSM 7.x with Container Manager).
 
-Two LLM options:
+The recommended setup uses **Gemini** (Google's cloud LLM) — just an API key, no GPU, no second machine. If you prefer fully local/private inference, see [Appendix: Ollama on MacBook](#appendix-ollama-on-macbook-optional) at the bottom.
 
 | | Gemini (Recommended) | Ollama (Optional) |
 |---|---|---|
@@ -14,8 +14,6 @@ Two LLM options:
 ---
 
 ## Architecture
-
-### Option A: Gemini (Recommended)
 
 ```
 ┌──────────────────────────┐
@@ -30,88 +28,134 @@ Two LLM options:
       Discord API
 ```
 
-Simplest option — the NAS handles everything. LLM queries go to Google's Gemini API over the internet. No second machine required.
+The NAS handles everything. LLM queries go to Google's Gemini API over the internet. No second machine required.
 
-### Option B: Ollama on MacBook
-
-```
-┌──────────────────────────┐         ┌──────────────────────────┐
-│  Synology NAS            │         │  MacBook (Apple Silicon)  │
-│  Docker: scout-report     │──HTTP──>│  Ollama + gemma4:e4b     │
-│  - cron scheduler        │         │  192.168.x.x:11434      │
-│  - discord bot           │<────────│                          │
-│  - calendar fetcher      │         └──────────────────────────┘
-└──────────┬───────────────┘
-           │
-           ▼
-      Discord API
-```
-
-The bot calls Ollama over the LAN for LLM queries. If the MacBook is asleep or unreachable, the bot still runs — it just replies with a friendly offline message for chat queries.
-
-In both options, scheduled notifications (weeknight/weekend) don't need the LLM — they only format calendar data and send via [Apprise](https://github.com/caronc/apprise) (requires `APPRISE_URL` in `.env`).
+Scheduled notifications (weeknight/weekend) don't need the LLM at all — they only format calendar data and send via [Apprise](https://github.com/caronc/apprise) (requires `APPRISE_URL` in `.env`).
 
 ---
 
-## 1. NAS: Deploy the Bot
+## 1. Deploy the Bot
 
 ### Prerequisites
 
-- SSH enabled: **Control Panel → Terminal & SNMP → Enable SSH**
-- Docker installed: **Package Center → Container Manager** (or Docker on older DSM)
+- **Container Manager** installed from **Package Center** (called "Docker" on DSM 6.x)
+- Bot files copied to a shared folder on the NAS (e.g. `/docker/scout-report/`)
 
 ### Copy Files to NAS
 
-Via SMB share:
+Copy the project folder to your NAS via **File Station** (drag and drop), SMB share, or SCP:
 
 ```bash
-# From your Mac
+# SMB (from your Mac, if the NAS share is mounted)
 cp -r "/path/to/scout-report" /Volumes/your-nas-share/docker/scout-report/
-```
 
-Or via SCP:
-
-```bash
+# Or SCP
 scp -r "/path/to/scout-report" admin@NAS_IP:/volume1/docker/scout-report/
 ```
 
 ### Configure .env
 
-SSH into the NAS and edit `.env`:
+Before creating the project, prepare your `.env` file. You can edit it on the NAS via **File Station → right-click → Edit with Text Editor**, or copy a pre-filled version from your Mac.
 
-```bash
-ssh admin@NAS_IP
-cd /volume1/docker/scout-report
-cp .env.example .env
-vi .env
+1. Duplicate `.env.example` and rename to `.env`
+2. Fill in the sections below (same order as the file):
+
+#### Calendars (at least one required)
+
+Use numbered slots. Any ICS URL works — iCloud, Outlook, Google, etc. See [SETUP.md Step 1](SETUP.md#1-get-calendar-urls) for how to get these URLs.
+
+```env
+CALENDAR_1_URL=webcal://p60-caldav.icloud.com/published/2/YOUR_ID
+CALENDAR_1_LABEL=Personal
+CALENDAR_2_URL=https://outlook.office365.com/owa/calendar/YOUR_ID/calendar.ics
+CALENDAR_2_LABEL=Work
 ```
 
-#### Gemini (Recommended)
+Up to 9 numbered slots (`CALENDAR_1` through `CALENDAR_9`). Labels are your choice — they appear in digests, LLM context, and `WORK_LABELS` matching.
 
-Get a free API key from [Google AI Studio](https://aistudio.google.com/app/apikey), then set:
+#### Discord Bot (required for interactive chat)
 
-```bash
+See [SETUP.md Step 2](SETUP.md#2-create-a-discord-bot) for creating the bot and getting these values.
+
+```env
+DISCORD_BOT_TOKEN=your-bot-token
+DISCORD_CHANNEL_ID=123456789
+```
+
+Omit `DISCORD_CHANNEL_ID` for DM-only mode. Omit `DISCORD_BOT_TOKEN` entirely for notification-only mode (requires `APPRISE_URL` + a schedule below).
+
+#### LLM Backend
+
+```env
 LLM_BACKEND=gemini
 GEMINI_API_KEY=your-api-key-here
-# GEMINI_MODEL=gemini-2.5-flash   # default, can omit
 ```
 
-That's it for LLM config — no `OLLAMA_URL` needed.
+Get a free key from [Google AI Studio](https://aistudio.google.com/app/apikey). That's it — `GEMINI_MODEL` defaults to `gemini-2.5-flash-lite` and `LLM_BACKEND` defaults to `gemini`, so you only need the API key.
 
-> **For Ollama on a MacBook instead**, see [Section 3](#3-optional-macbook-as-local-llm-ollama).
+#### Timezone
 
-All other variables (calendar URLs, Discord token, etc.) are the same as [SETUP.md](SETUP.md#5-configure).
-
-### Build and Start
-
-```bash
-cd /volume1/docker/scout-report
-docker compose up -d
+```env
+TZ=America/Los_Angeles
 ```
 
-> **Note:** If `docker compose` isn't available, try `docker-compose` (older syntax) or use Synology's Container Manager UI to import the project.
+Set this to your [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (e.g. `Europe/London`, `Asia/Tokyo`). Controls when scheduled digests fire and how times appear in the bot's answers. The container has no local timezone — this is the only way it knows where you are.
+
+#### Notifications (optional)
+
+Scheduled digests are off by default. To enable them, create a Discord webhook ([SETUP.md Step 3](SETUP.md#3-set-up-notifications-optional)) and set:
+
+```env
+APPRISE_URL=discord://webhook_id/webhook_token
+WEEKNIGHT_SCHEDULE=sun,mon,tue,wed,thu 20:00
+WEEKEND_SCHEDULE=thu 16:00
+WORK_LABELS=Work
+```
+
+`WORK_LABELS` must match your `CALENDAR_N_LABEL` values — it controls which calendars appear in the weeknight digest. If unset, weeknight digests show "No meetings."
+
+#### Security: Restrict Bot Access
+
+On a NAS that's always online, lock the bot to your Discord user ID:
+
+```env
+DISCORD_ALLOWED_USERS=123456789012345678
+```
+
+To find your user ID: Discord → Settings → Advanced → enable Developer Mode, then right-click your name → Copy User ID. Multiple IDs can be comma-separated.
+
+#### Minimum viable `.env`
+
+```env
+CALENDAR_1_URL=https://your-calendar-url.ics
+CALENDAR_1_LABEL=Personal
+GEMINI_API_KEY=your_api_key_here
+DISCORD_BOT_TOKEN=your_token_here
+TZ=America/New_York
+```
+
+Everything else has sensible defaults. The bot validates config at startup and tells you what's missing.
+
+For the full list of optional tuning settings (event filtering, history, conversation memory, system prompt override, etc.) see [SETUP.md §5](SETUP.md#5-configure) and [.env.example](.env.example).
+
+### Build and Start (Container Manager)
+
+1. Open **Container Manager → Project → Create**
+2. **Project Name:** `scout-report`
+3. **Path:** Select the folder where you copied the files (e.g. `/docker/scout-report`)
+4. **Source:** Choose **Use existing docker-compose.yml** — Container Manager will detect the `docker-compose.yaml` in the folder
+5. Click through the wizard and **Done**
+6. When prompted, choose **Start the project**
+
+Container Manager runs `docker compose up --build` behind the scenes — it builds the image from the `Dockerfile` and starts the container.
+
+> **Updating after code or config changes:** Go to **Project → select scout-report → Action → Build**, then **Action → Start**. This rebuilds the image and restarts the container.
 
 ### Check Logs
+
+**Container Manager → Project → scout-report → Details → Containers → select scout_report → Details → Log**
+
+Or via SSH:
 
 ```bash
 docker compose logs -f scout-report
@@ -120,25 +164,24 @@ docker compose logs -f scout-report
 You should see:
 
 ```
-LLM backend: Gemini (gemini-2.5-flash)
+LLM backend: Gemini (gemini-2.5-flash-lite)
 Loaded 2 calendar(s): Personal, Work
-  Work calendars: Work
-  Personal calendars: Personal
+  Personal calendars: Personal, Work
 ────────────────────────────────────────
   Discord bot: enabled (channel 123456789)
-  Notifications: enabled
+  Notifications: disabled (schedules off)
   History: 10 days back
 ────────────────────────────────────────
 Starting Discord bot + scheduler...
 Discord bot logged in as YourBot#1234
-  Weeknight digest: sun,mon,tue,wed,thu at 20:00
-  Weekend preview: thu at 16:00
 Scheduler started.
 ```
 
+> If you've enabled scheduled digests (`WEEKNIGHT_SCHEDULE`/`WEEKEND_SCHEDULE` ≠ `off`), the log will also show the schedule times and "Notifications: enabled".
+
 ### Auto-Restart on Reboot
 
-Already configured — `docker-compose.yaml` has `restart: always`.
+Already configured — `docker-compose.yaml` has `restart: always`. Container Manager will restart the container automatically after a NAS reboot or DSM update.
 
 ---
 
@@ -155,9 +198,50 @@ Already configured — `docker-compose.yaml` has `restart: always`.
 
 ---
 
-## 3. Optional: MacBook as Local LLM (Ollama)
+## 3. Troubleshooting
+
+| Problem | Solution |
+|---|---|
+| Project won't build | Check **Project → Details → Containers → Log** for errors — likely a missing env var in `.env` |
+| Container exits immediately | Check the container log — common causes: missing `DISCORD_BOT_TOKEN`, no calendar URLs, invalid `GEMINI_API_KEY` |
+| No scheduled notifications | Verify `APPRISE_URL` is set in `.env` and schedules aren't `off` |
+| "🔑 Gemini API key is invalid or expired" | Check `GEMINI_API_KEY` in `.env` — get a key from [AI Studio](https://aistudio.google.com/app/apikey) |
+| "⏳ Gemini rate limit reached" | Free tier allows ~5 RPM. Wait a moment or reduce query frequency |
+| "❌ Something went wrong with Gemini" | Check `docker compose logs scout-report` for details |
+
+---
+
+## 4. Resource Usage
+
+| Component | RAM | CPU | Disk |
+|---|---|---|---|
+| scout-report container | ~60 MB | Minimal | ~200 MB image |
+
+The bot is I/O-bound (HTTP calls to calendar feeds and the Gemini API), not CPU-bound, so even entry-level NAS hardware works fine.
+
+---
+---
+
+## Appendix: Ollama on MacBook (Optional)
 
 Use this setup if you prefer a **fully local/private LLM** or don't want to use a cloud API. The bot runs on the NAS and calls Ollama on a MacBook (or any machine) over the LAN.
+
+### Architecture
+
+```
+┌──────────────────────────┐         ┌──────────────────────────┐
+│  Synology NAS            │         │  MacBook (Apple Silicon)  │
+│  Docker: scout-report     │──HTTP──>│  Ollama + gemma4:e4b     │
+│  - cron scheduler        │         │  192.168.x.x:11434      │
+│  - discord bot           │<────────│                          │
+│  - calendar fetcher      │         └──────────────────────────┘
+└──────────┬───────────────┘
+           │
+           ▼
+      Discord API
+```
+
+If the MacBook is asleep or unreachable, the bot still runs — it just replies with a friendly offline message for chat queries. Scheduled notifications don't need the LLM at all.
 
 ### Install Ollama
 
@@ -210,7 +294,7 @@ So `OLLAMA_URL` doesn't break when the MacBook gets a new DHCP lease:
 
 Or reserve the IP in your router's DHCP settings.
 
-### Verify Ollama
+### Verify Ollama is Reachable
 
 From the NAS (or any machine on the LAN):
 
@@ -228,12 +312,7 @@ OLLAMA_URL=http://192.168.86.86:11434
 OLLAMA_MODEL=gemma4:e4b
 ```
 
-Then rebuild:
-
-```bash
-cd /volume1/docker/scout-report
-docker compose up -d
-```
+Then rebuild in Container Manager: **Project → scout-report → Action → Build**, then **Action → Start**.
 
 Startup logs will show:
 
@@ -249,27 +328,7 @@ LLM backend: Ollama (gemma4:e4b at http://192.168.86.86:11434)
 | Ollama offline fallback | Stop Ollama on the Mac, send a message — bot should reply with "🔌 LLM is offline — Ollama may not be running or is unreachable." |
 | Slow after Mac wake | First query after wake takes longer (model cold-loads ~15–20s). Subsequent queries are fast |
 
----
-
-## Troubleshooting
-
-### General
-
-| Problem | Solution |
-|---|---|
-| `docker compose` not found on NAS | Use `docker-compose` (hyphenated) or install via Container Manager |
-| Container exits immediately | Check `docker compose logs scout-report` — likely a missing env var |
-| No scheduled notifications | Verify `APPRISE_URL` is set in `.env` |
-
-### Gemini
-
-| Problem | Solution |
-|---|---|
-| "🔑 Gemini API key is invalid or expired" | Check `GEMINI_API_KEY` in `.env` — get a key from [AI Studio](https://aistudio.google.com/app/apikey) |
-| "⏳ Gemini rate limit reached" | Free tier allows ~5 RPM. Wait a moment or reduce query frequency |
-| "❌ Something went wrong with Gemini" | Check `docker compose logs scout-report` for details |
-
-### Ollama
+### Ollama Troubleshooting
 
 | Problem | Solution |
 |---|---|
@@ -278,20 +337,10 @@ LLM backend: Ollama (gemma4:e4b at http://192.168.86.86:11434)
 | NAS can't resolve MacBook hostname | Use the IP address, not a hostname. Set a static IP or DHCP reservation |
 | Bot responds slowly after Mac wake | First query after wake takes longer (model cold-loads ~15–20s). Subsequent queries are fast |
 
----
-
-## Resource Usage
-
-### NAS (Both Options)
-
-| Component | RAM | CPU | Disk |
-|---|---|---|---|
-| scout-report container | ~60 MB | Minimal | ~200 MB image |
-
-### MacBook (Ollama Only)
+### Ollama Resource Usage
 
 | Component | RAM | CPU | Disk |
 |---|---|---|---|
 | Ollama + gemma4:e4b | ~12 GB | Moderate during inference | ~10 GB model |
 
-The NAS stays under 100 MB total for the bot. The MacBook only uses significant resources during active LLM queries.
+The MacBook only uses significant resources during active LLM queries. NAS resource usage stays the same (~60 MB).
