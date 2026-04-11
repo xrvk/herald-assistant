@@ -89,8 +89,8 @@ def _add_calendar(env_var, label):
         url = url.replace("webcal://", "https://")
         CALENDARS.append((label, url))
 
-_add_calendar("ICLOUD_URL", os.getenv("ICLOUD_LABEL", "Personal"))
-_add_calendar("OUTLOOK_URL", os.getenv("OUTLOOK_LABEL", "Work"))
+_add_calendar("ICLOUD_URL", os.getenv("ICLOUD_LABEL", "iCloud"))
+_add_calendar("OUTLOOK_URL", os.getenv("OUTLOOK_LABEL", "Outlook"))
 _add_calendar("GOOGLE_URL", os.getenv("GOOGLE_LABEL", "Google"))
 
 # Support numbered extra calendars: CALENDAR_1_URL + CALENDAR_1_LABEL, etc.
@@ -106,7 +106,7 @@ if not CALENDARS:
 print(f"Loaded {len(CALENDARS)} calendar(s): {', '.join(label for label, _ in CALENDARS)}")
 
 # Which calendar labels count as "work" (used for weeknight digest + LLM context)
-WORK_LABELS = {l.strip() for l in os.getenv("WORK_LABELS", "Work").split(",")}
+WORK_LABELS = {l.strip() for l in os.getenv("WORK_LABELS", "").split(",") if l.strip()}
 
 _work_cals = [label for label, _ in CALENDARS if label in WORK_LABELS]
 _personal_cals = [label for label, _ in CALENDARS if label not in WORK_LABELS]
