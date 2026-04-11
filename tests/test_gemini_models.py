@@ -1,8 +1,11 @@
 """
-Gemini model benchmark test — compare latency across free-tier models.
+Gemini/Gemma model benchmark test — compare latency across free-tier models.
 
-Tests all available Gemini free-tier models (2.5 Pro, 2.5 Flash, 2.5 Flash-Lite)
-with realistic calendar context (16 days future + 10 days past) to find the
+Tests all available free-tier models accessible via the Gemini API:
+  - Gemini 2.5 Pro, Flash, Flash-Lite (proprietary)
+  - Gemma 4 E4B, 26B MoE, 31B Dense (open-weight, Apache 2.0)
+
+Uses realistic calendar context (16 days future + 10 days past) to find the
 lowest-latency option for the Scout Report bot.
 
 Requirements:
@@ -33,12 +36,22 @@ import pytest
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 BENCHMARK_ROUNDS = int(os.getenv("BENCHMARK_ROUNDS", "1"))
 
-# Models available on Gemini free tier (April 2026)
-FREE_TIER_MODELS = [
+# Models available on Gemini API free tier (April 2026)
+GEMINI_MODELS = [
     "gemini-2.5-pro",
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
 ]
+
+# Gemma 4 open-weight models available via Gemini API (April 2026, Apache 2.0)
+GEMMA_MODELS = [
+    "gemma-4-e4b-it",       # 4.5B effective (edge, 128K ctx)
+    "gemma-4-26b-a4b-it",   # 26B MoE, 4B active (256K ctx)
+    "gemma-4-31b-it",       # 31B dense (256K ctx)
+]
+
+# Combined list for benchmarks
+FREE_TIER_MODELS = GEMINI_MODELS + GEMMA_MODELS
 
 # Calendar context window matching the user's requirements
 FUTURE_DAYS = 16
@@ -282,17 +295,21 @@ class TestGeminiModelBenchmark:
 
         results = {}
         for model_name in FREE_TIER_MODELS:
+            # thinking_config only supported by Gemini models, not Gemma
+            config = {
+                "system_instruction": classify_prompt,
+                "temperature": 0,
+                "max_output_tokens": 16,
+            }
+            if model_name.startswith("gemini-"):
+                config["thinking_config"] = {"thinking_budget": 0}
+
             try:
                 start = time.perf_counter()
                 resp = gemini_client.models.generate_content(
                     model=model_name,
                     contents=question,
-                    config={
-                        "system_instruction": classify_prompt,
-                        "temperature": 0,
-                        "max_output_tokens": 16,
-                        "thinking_config": {"thinking_budget": 0},
-                    },
+                    config=config,
                 )
                 elapsed = time.perf_counter() - start
                 answer = (resp.text or "").strip().lower()
@@ -306,12 +323,7 @@ class TestGeminiModelBenchmark:
                         resp = gemini_client.models.generate_content(
                             model=model_name,
                             contents=question,
-                            config={
-                                "system_instruction": classify_prompt,
-                                "temperature": 0,
-                                "max_output_tokens": 16,
-                                "thinking_config": {"thinking_budget": 0},
-                            },
+                            config=config,
                         )
                         elapsed = time.perf_counter() - start
                         answer = (resp.text or "").strip().lower()
@@ -359,7 +371,7 @@ class TestGeminiModelBenchmark:
             time.sleep(2)
 
         print(f"\n{'═' * 70}")
-        print(f"  GEMINI FREE TIER MODEL COMPARISON")
+        print(f"  GEMINI + GEMMA FREE TIER MODEL COMPARISON")
         print(f"  Context: {HISTORY_DAYS}d past + {FUTURE_DAYS}d future "
               f"({len(calendar_context)} chars / ~{_estimate_tokens(calendar_context)} tokens)")
         print(f"{'═' * 70}")
@@ -372,7 +384,8 @@ class TestGeminiModelBenchmark:
 
         for i, (model, data) in enumerate(ranked):
             marker = " ⚡ FASTEST" if i == 0 else ""
-            print(f"\n  #{i+1} {model}{marker}")
+            family = "Gemma" if model.startswith("gemma-") else "Gemini"
+            print(f"\n  #{i+1} {model} [{family}]{marker}")
             print(f"     Latency: {data['latency']:.2f}s")
             print(f"     Response: {data['response_len']} chars")
             print(f"     Preview: {data['preview'][:100]}...")
@@ -387,12 +400,15 @@ class TestGeminiModelBenchmark:
             winner = ranked[0][0]
             print(f"  RECOMMENDATION: {winner}")
             if winner == "gemini-2.5-flash-lite":
-                print(f"  → Flash-Lite is fastest with highest free-tier RPM (15 RPM, 500-1000 RPD)")
+                print(f"  → Flash-Lite is fastest with highest Gemini free-tier RPM (15 RPM, 1000 RPD)")
                 print(f"  → Best fit for calendar bot: low latency, lightweight Q&A, high throughput")
             elif winner == "gemini-2.5-flash":
                 print(f"  → Flash offers best balance of speed and reasoning quality")
+            elif winner.startswith("gemma-"):
+                print(f"  → Gemma 4 open-weight model via Gemini API (30 RPM, 14400 RPD)")
+                print(f"  → Apache 2.0 licensed — can also self-host for unlimited throughput")
             else:
-                print(f"  → Pro offers deepest reasoning but has tighter rate limits (2-5 RPM)")
+                print(f"  → Pro offers deepest reasoning but has tighter rate limits (5 RPM)")
         print(f"{'═' * 70}\n")
 
 
@@ -411,10 +427,11 @@ def _run_standalone():
     calendar_context = _build_demo_calendar_context()
 
     print(f"\n{'═' * 70}")
-    print(f"  GEMINI FREE TIER MODEL BENCHMARK")
+    print(f"  GEMINI + GEMMA FREE TIER MODEL BENCHMARK")
     print(f"  Context: {HISTORY_DAYS}d past + {FUTURE_DAYS}d future "
           f"({len(calendar_context)} chars / ~{_estimate_tokens(calendar_context)} tokens)")
     print(f"  Rounds per model: {BENCHMARK_ROUNDS}")
+    print(f"  Models: {len(GEMINI_MODELS)} Gemini + {len(GEMMA_MODELS)} Gemma 4")
     print(f"{'═' * 70}\n")
 
     all_results = {}
@@ -469,7 +486,8 @@ def _run_standalone():
     print(f"{'═' * 70}")
     for i, (model, data) in enumerate(ranked):
         marker = " ⚡ FASTEST" if i == 0 else ""
-        print(f"  #{i+1} {model}{marker}")
+        family = "Gemma" if model.startswith("gemma-") else "Gemini"
+        print(f"  #{i+1} {model} [{family}]{marker}")
         print(f"     Avg: {data['avg']:.2f}s | Median: {data['median']:.2f}s | "
               f"Min: {data['min']:.2f}s | Max: {data['max']:.2f}s")
     print(f"{'═' * 70}\n")
