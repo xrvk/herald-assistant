@@ -124,6 +124,11 @@ LLM backend: Gemini (gemini-2.5-flash)
 Loaded 2 calendar(s): Personal, Work
   Work calendars: Work
   Personal calendars: Personal
+────────────────────────────────────────
+  Discord bot: enabled (channel 123456789)
+  Notifications: enabled
+  History: 10 days back
+────────────────────────────────────────
 Starting Discord bot + scheduler...
 Discord bot logged in as YourBot#1234
   Weeknight digest: sun,mon,tue,wed,thu at 20:00

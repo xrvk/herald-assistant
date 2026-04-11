@@ -11,6 +11,7 @@ Runs as a Docker container with your choice of LLM backend.
 | **Weeknight digest** | Tomorrow's work events — configurable days/time (default Sun–Thu 8 PM) |
 | **Weekend preview** | Fri–Sun events grouped by day — configurable day/time (default Thu 4 PM) |
 | **Interactive chat** (Discord DM or channel) | Ask anything about your schedule — powered by Gemini or Ollama |
+| **Bot commands** | `!cal` (list calendars), `!llm` (show backend), `!switch g`/`o` (switch backend) |
 
 **Example questions you can ask the bot:**
 - "Am I free Tuesday afternoon?"
@@ -56,45 +57,55 @@ Running on a NAS with the LLM on a separate machine? See **[NAS-DUAL-SETUP.md](N
 ### Overview
 
 1. **Get your calendar URLs** (iCloud, Outlook, Google, or any ICS feed)
-2. **Create a Discord bot** and/or webhook for notifications
+2. **Create a Discord bot** (for chat) and optionally a **webhook** (for scheduled digests)
 3. **Get a [Gemini API key](https://aistudio.google.com/app/apikey)** (free, no GPU needed) — or [install Ollama](https://ollama.com/) if you prefer local inference
 4. **`cp .env.example .env`** and fill in your values
 5. **`docker compose up -d`** (or run locally with Python)
 
 ### Configuration
 
-All config lives in a single `.env` file. See [.env.example](.env.example) for the full reference with comments, or the [configuration section in SETUP.md](SETUP.md#5-configure) for details.
+All config lives in a single `.env` file — copy [.env.example](.env.example) and fill in your values. See [SETUP.md](SETUP.md#5-configure) for step-by-step instructions.
 
-**Required** (set at least one calendar + one of Discord bot or notifications):
+**Required** (bot won't start without these):
 
 | Variable | Description |
 |---|---|
-| `ICLOUD_URL` / `OUTLOOK_URL` / `GOOGLE_URL` | Calendar ICS URLs (at least one) |
-| `APPRISE_URL` | Notification target — required if scheduled digests are enabled |
-| `DISCORD_BOT_TOKEN` + `DISCORD_CHANNEL_ID` | For interactive LLM chat via Discord |
+| `CALENDAR_N_URL` + `CALENDAR_N_LABEL` | Calendar ICS URLs (`N` = 1–9, at least one required). Legacy shortcuts also available — see .env.example |
+
+**Conditional** (required depending on which features you enable):
+
+| Variable | When required | Description |
+|---|---|---|
+| `GEMINI_API_KEY` | Using Gemini (default setup) | Google Gemini API key — [get one free](https://aistudio.google.com/app/apikey) |
+| `DISCORD_BOT_TOKEN` | Using interactive chat | Discord bot token (omit for notification-only mode) |
+| `APPRISE_URL` | Sending scheduled digests | Notification URL — required when `WEEKNIGHT_SCHEDULE` or `WEEKEND_SCHEDULE` ≠ `off` |
 
 **Optional** (sensible defaults built in):
 
 | Variable | Default | Description |
 |---|---|---|
 | `LLM_BACKEND` | `gemini` | LLM provider: `gemini` (cloud) or `ollama` (local) |
-| `GEMINI_API_KEY` | *(none)* | Google Gemini API key (required when `LLM_BACKEND=gemini`) |
+| `DISCORD_CHANNEL_ID` | *(none)* | Channel for bot to listen in (omit for DM-only mode) |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model (when `LLM_BACKEND=gemini`) |
 | `OLLAMA_URL` | `http://host.docker.internal:11434` | Ollama endpoint (when `LLM_BACKEND=ollama`) |
 | `OLLAMA_MODEL` | `gemma4:e4b` | Ollama model (when `LLM_BACKEND=ollama`) |
-| `TZ` | `America/Los_Angeles` | Timezone ([IANA format](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)) |
+| `TZ` | `America/Los_Angeles` | Timezone ([IANA timezone format](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)) |
+| `WEEKNIGHT_SCHEDULE` | `off` | Weeknight digest schedule: `"days HH:MM"` or `off` |
+| `WEEKEND_SCHEDULE` | `off` | Weekend preview schedule: `"days HH:MM"` or `off` |
 | `ICLOUD_LABEL` / `OUTLOOK_LABEL` / `GOOGLE_LABEL` | `Personal` / `Work` / `Google` | Calendar labels (shown in LLM context) |
 | `WORK_LABELS` | `Work` | Which labels are work calendars (for digest + LLM) |
-| `WEEKNIGHT_SCHEDULE` | `sun,mon,tue,wed,thu 20:00` | Weeknight digest schedule (or `off`) |
-| `WEEKEND_SCHEDULE` | `thu 16:00` | Weekend preview schedule (or `off`) |
 | `IGNORED_EVENTS` | *(none)* | Events to hide (comma-separated substrings) |
 | `CONTEXT_DAYS` | `7` | Days ahead the LLM sees |
 | `HISTORY_DAYS` | `10` | Days of past events available for history questions |
 | `HISTORY_CACHE_TTL` | `21600` | Past events cache duration in seconds (default 6h) |
 | `CACHE_TTL` | `3600` | Calendar cache duration in seconds |
 | `SYSTEM_PROMPT` | *(built-in)* | Override the LLM system prompt |
+| `DISCORD_ALLOWED_USERS` | *(none — all users)* | Restrict bot to specific Discord user IDs (comma-separated) |
+| `CONV_HISTORY_TURNS` | `3` | Q&A pairs kept per user for follow-up questions |
+| `CONV_HISTORY_TTL` | `1800` | Conversation staleness timeout in seconds (30 min) |
+| `CONV_HISTORY_CTX_BUMP` | `4096` | Extra Ollama context tokens when history overflows (no effect on Gemini) |
 
-> **Note on past events:** History questions (e.g. "what did I have yesterday?") are answered using past calendar data from your ICS feeds. The bot automatically detects when a question is about the past and includes historical context. Past event availability depends on your calendar provider — some providers prune past events from ICS feeds. The bot logs a warning at startup if a calendar returns no past events.
+> **Note on past events:** History questions (e.g. "what did I have yesterday?") work by reading past events from your calendar feeds. Some calendar providers don't include past events in their feeds, which limits how far back the bot can look. The bot logs a warning at startup if a calendar returns no past events.
 
 ## Project Structure
 
@@ -105,6 +116,7 @@ All config lives in a single `.env` file. See [.env.example](.env.example) for t
 ├── docker-compose.yaml  # Deployment config (reads .env)
 ├── .env                 # Your secrets (git-ignored)
 ├── .env.example         # Template for .env
+├── scout_report/        # Python package (internal modules)
 ├── SETUP.md             # Full setup & deployment guide
 ├── NAS-DUAL-SETUP.md    # Dual-machine NAS + LLM host guide
 └── .gitignore
@@ -112,7 +124,7 @@ All config lives in a single `.env` file. See [.env.example](.env.example) for t
 
 ## Calendar Sources
 
-Any ICS/iCal feed works — iCloud, Outlook 365, Google Calendar, or custom URLs. See [SETUP.md](SETUP.md#1-get-calendar-urls) for instructions on getting each URL.
+Any ICS/iCal feed works — iCloud, Outlook 365, Google Calendar, or custom URLs. Up to 9 numbered calendars (`CALENDAR_1` through `CALENDAR_9`) plus 3 legacy shortcuts — 12 total. See [SETUP.md](SETUP.md#1-get-calendar-urls) for instructions on getting each URL.
 
 ## Notification Targets
 
