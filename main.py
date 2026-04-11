@@ -24,7 +24,7 @@ if _llm_backend not in ("ollama", "gemini"):
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+_gemini_model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 _gemini_client = None
 _gemini_api_key = os.getenv("GEMINI_API_KEY")
 
@@ -54,9 +54,23 @@ def set_backend(name):
         _get_gemini_client()  # validate before switching
     _llm_backend = name
 
+GEMINI_MODELS = {
+    "flash-lite": "gemini-2.5-flash-lite",
+    "flash":      "gemini-2.5-flash",
+}
+
+def get_gemini_model():
+    return _gemini_model
+
+def set_gemini_model(name: str):
+    global _gemini_model
+    if name not in GEMINI_MODELS.values():
+        raise ValueError(f"Unknown Gemini model: {name!r}. Valid: {list(GEMINI_MODELS.values())}")
+    _gemini_model = name
+
 if _llm_backend == "gemini":
     _get_gemini_client()  # validate at startup
-    print(f"LLM backend: Gemini ({GEMINI_MODEL})")
+    print(f"LLM backend: Gemini ({get_gemini_model()})")
 else:
     print(f"LLM backend: Ollama ({OLLAMA_MODEL} at {OLLAMA_URL})")
 
@@ -508,7 +522,7 @@ def classify_question(question):
     try:
         if get_backend() == "gemini":
             resp = _get_gemini_client().models.generate_content(
-                model=GEMINI_MODEL,
+                model=get_gemini_model(),
                 contents=question,
                 config={
                     "system_instruction": _CLASSIFY_PROMPT,
@@ -655,7 +669,7 @@ def ask_gemini(question, calendar_context, history=None):
     for attempt in range(_GEMINI_MAX_RETRIES):
         try:
             resp = _get_gemini_client().models.generate_content(
-                model=GEMINI_MODEL,
+                model=get_gemini_model(),
                 contents=contents,
                 config={
                     "system_instruction": system_prompt,
@@ -863,10 +877,22 @@ async def on_message(message):
             await message.reply("Use `.switch g` for Gemini or `.switch o` for Ollama")
             return
         current = get_backend()
+        cur_gmodel = get_gemini_model()
+        ollama_marker = " <-- **Current**" if current == "ollama" else ""
+        gemini_rows = []
+        # Approximate free-tier limits as of Apr 2026; check ai.google.dev for latest.
+        model_info = [
+            ("gemini-2.5-flash-lite", "15 RPM, ~200ms TTFT"),
+            ("gemini-2.5-flash",      "10 RPM, ~300ms TTFT"),
+        ]
+        for m, info in model_info:
+            marker = " <-- **Current**" if (current == "gemini" and cur_gmodel == m) else ""
+            gemini_rows.append(f"   • `{m}` — {info}{marker}")
         await message.reply(
-            f"1. **Ollama** - model: `{OLLAMA_MODEL}`{' <-- **Current**' if current == 'ollama' else ''}\n"
-            f"2. **Gemini** - model: `{GEMINI_MODEL}`{' <-- **Current**' if current == 'gemini' else ''}\n\n"
-            "Switch with: `.switch g` or `.switch o`"
+            f"1. **Ollama** — model: `{OLLAMA_MODEL}`{ollama_marker}\n"
+            f"2. **Gemini** models:\n"
+            + "\n".join(gemini_rows) + "\n\n"
+            "Switch with: `.switch o`, `.switch fl`, `.switch gf`"
         )
         return
 
@@ -874,31 +900,67 @@ async def on_message(message):
     if question.lower().startswith("!switch"):
         parts = question.split(maxsplit=1)
         if len(parts) == 1:
-            # No argument: toggle to the other backend
-            choice = "ollama" if get_backend() == "gemini" else "gemini"
+            # No argument: cycle to next model in the ring
+            # ollama → flash-lite → flash → ollama
+            _cycle = [
+                ("ollama", None),
+                ("gemini", "gemini-2.5-flash-lite"),
+                ("gemini", "gemini-2.5-flash"),
+            ]
+            current = (get_backend(), get_gemini_model() if get_backend() == "gemini" else None)
+            idx = next((i for i, c in enumerate(_cycle) if c == current), 0)
+            target_backend, target_model = _cycle[(idx + 1) % len(_cycle)]
+            try:
+                set_backend(target_backend)
+                if target_model:
+                    set_gemini_model(target_model)
+                hist_key = (message.author.id if is_dm else message.channel.id, message.author.id)
+                _conv_history.pop(hist_key, None)
+                label = get_backend()
+                if get_backend() == "gemini":
+                    label = f"{label} ({get_gemini_model()})"
+                await message.reply(f"Switched to **{label}**")
+                print(f"[Backend] Switched to {get_backend()} ({get_gemini_model() if get_backend() == 'gemini' else OLLAMA_MODEL}) by {message.author}")
+            except (ValueError, RuntimeError) as e:
+                await message.reply(f"Failed: {e}")
+            return
         else:
             choice = parts[1].strip().lower()
         switch_map = {
-            "g": "gemini",
-            "gemini": "gemini",
-            "o": "ollama",
-            "ollama": "ollama",
-            # Keep legacy numeric shortcuts for compatibility.
-            "1": "ollama",
-            "2": "gemini",
+            "g":          ("gemini", None),
+            "gemini":     ("gemini", None),
+            "o":          ("ollama", None),
+            "ollama":     ("ollama", None),
+            # Legacy numeric shortcuts
+            "1":          ("ollama", None),
+            "2":          ("gemini", None),
+            # Gemini per-model shortcuts
+            "fl":         ("gemini", "gemini-2.5-flash-lite"),
+            "flash-lite": ("gemini", "gemini-2.5-flash-lite"),
+            "gf":         ("gemini", "gemini-2.5-flash"),
+            "flash":      ("gemini", "gemini-2.5-flash"),
         }
-        target = switch_map.get(choice)
-        if not target:
-            await message.reply("Invalid choice. Use `.switch g` or `.switch o`")
+        entry = switch_map.get(choice)
+        if not entry:
+            await message.reply(
+                "Invalid choice. Use `.switch fl` (flash-lite), "
+                "`.switch gf` (flash), or `.switch o` (ollama)"
+            )
             return
 
+        target_backend, target_model = entry
         try:
-            set_backend(target)
-            # Clear conversation history on backend switch
+            set_backend(target_backend)
+            if target_model:
+                set_gemini_model(target_model)
+            # Clear conversation history on backend/model switch
             hist_key = (message.author.id if is_dm else message.channel.id, message.author.id)
             _conv_history.pop(hist_key, None)
-            await message.reply(f"Switched to **{get_backend()}**")
-            print(f"[Backend] Switched to {get_backend()} by {message.author}")
+            label = get_backend()
+            if get_backend() == "gemini":
+                label = f"{label} ({get_gemini_model()})"
+            await message.reply(f"Switched to **{label}**")
+            print(f"[Backend] Switched to {get_backend()} ({get_gemini_model() if get_backend() == 'gemini' else OLLAMA_MODEL}) by {message.author}")
         except (ValueError, RuntimeError) as e:
             await message.reply(f"Failed: {e}")
         return
@@ -992,7 +1054,7 @@ async def on_message(message):
         print(f"[Chat] Reply ({len(answer)} chars): {answer[:100]}...")
         # Sign the reply with the active model
         backend = get_backend()
-        model_name = GEMINI_MODEL if backend == 'gemini' else OLLAMA_MODEL
+        model_name = get_gemini_model() if backend == 'gemini' else OLLAMA_MODEL
         signature = f"\n*— {model_name}*"
         # Discord has a 2000 char limit; fit truncation + signature if needed
         if len(answer) + len(signature) > _DISCORD_MSG_LIMIT:
