@@ -16,8 +16,46 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 # Configuration
 TZ = ZoneInfo(os.getenv("TZ", "America/Los_Angeles"))
 
+# ── LLM Backend selection ──
+_llm_backend = os.getenv("LLM_BACKEND", "ollama").lower()
+if _llm_backend not in ("ollama", "gemini"):
+    raise RuntimeError(f"LLM_BACKEND must be 'ollama' or 'gemini', got: {_llm_backend!r}")
+
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
+
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+_gemini_client = None
+_gemini_api_key = os.getenv("GEMINI_API_KEY")
+
+def _get_gemini_client():
+    """Lazy-init Gemini client on first use."""
+    global _gemini_client
+    if _gemini_client is None:
+        if not _gemini_api_key:
+            raise RuntimeError("GEMINI_API_KEY is required for Gemini backend")
+        from google import genai
+        _gemini_client = genai.Client(api_key=_gemini_api_key)
+    return _gemini_client
+
+def get_backend():
+    return _llm_backend
+
+def set_backend(name):
+    global _llm_backend
+    name = name.lower()
+    if name not in ("ollama", "gemini"):
+        raise ValueError(f"Backend must be 'ollama' or 'gemini', got: {name!r}")
+    if name == "gemini":
+        _get_gemini_client()  # validate before switching
+    _llm_backend = name
+
+if _llm_backend == "gemini":
+    _get_gemini_client()  # validate at startup
+    print(f"LLM backend: Gemini ({GEMINI_MODEL})")
+else:
+    print(f"LLM backend: Ollama ({OLLAMA_MODEL} at {OLLAMA_URL})")
+
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 DISCORD_CHANNEL_ID = os.getenv("DISCORD_CHANNEL_ID")
 
@@ -29,7 +67,10 @@ if DISCORD_CHANNEL_ID:
 
 # Discord user allowlist (comma-separated user IDs). If set, only these users can interact.
 _allowed_raw = os.getenv("DISCORD_ALLOWED_USERS", "")
-DISCORD_ALLOWED_USERS = {int(uid.strip()) for uid in _allowed_raw.split(",") if uid.strip()} if _allowed_raw.strip() else set()
+try:
+    DISCORD_ALLOWED_USERS = {int(uid.strip()) for uid in _allowed_raw.split(",") if uid.strip()} if _allowed_raw.strip() else set()
+except ValueError as e:
+    raise RuntimeError(f"DISCORD_ALLOWED_USERS must be comma-separated numeric IDs, got: {_allowed_raw!r}") from e
 
 # ── Calendar sources ──
 # Each calendar is a (label, url) tuple. Labels are used in the LLM context
@@ -93,10 +134,16 @@ def _parse_schedule(raw, default_days, default_time):
     return (days.strip(), int(h), int(m))
 
 # Weeknight digest: tomorrow's work events (default: Sun-Thu 20:00)
-_weeknight = _parse_schedule(os.getenv("WEEKNIGHT_SCHEDULE", "sun,mon,tue,wed,thu 20:00"), "sun,mon,tue,wed,thu", "20:00")
+try:
+    _weeknight = _parse_schedule(os.getenv("WEEKNIGHT_SCHEDULE", "sun,mon,tue,wed,thu 20:00"), "sun,mon,tue,wed,thu", "20:00")
+except (ValueError, IndexError) as e:
+    raise RuntimeError(f"Invalid WEEKNIGHT_SCHEDULE: {os.getenv('WEEKNIGHT_SCHEDULE')!r} — {e}") from e
 
 # Weekend preview: Fri-Sun events (default: Thu 16:00)
-_weekend = _parse_schedule(os.getenv("WEEKEND_SCHEDULE", "thu 16:00"), "thu", "16:00")
+try:
+    _weekend = _parse_schedule(os.getenv("WEEKEND_SCHEDULE", "thu 16:00"), "thu", "16:00")
+except (ValueError, IndexError) as e:
+    raise RuntimeError(f"Invalid WEEKEND_SCHEDULE: {os.getenv('WEEKEND_SCHEDULE')!r} — {e}") from e
 
 # Setup Apprise (only required when scheduled digests are enabled)
 _schedules_enabled = _weeknight is not None or _weekend is not None
@@ -116,6 +163,26 @@ else:
 CONTEXT_DAYS = int(os.getenv("CONTEXT_DAYS", "7"))
 HISTORY_DAYS = int(os.getenv("HISTORY_DAYS", "10"))
 HISTORY_CACHE_TTL = int(os.getenv("HISTORY_CACHE_TTL", "21600"))  # 6 hours
+
+# ── Conversation history (follow-up support) ──
+CONV_HISTORY_TURNS = int(os.getenv("CONV_HISTORY_TURNS", "3"))
+CONV_HISTORY_TTL = int(os.getenv("CONV_HISTORY_TTL", "1800"))  # 30 minutes
+CONV_HISTORY_CTX_BUMP = int(os.getenv("CONV_HISTORY_CTX_BUMP", "4096"))
+_CONV_ANSWER_TRUNC = 500  # max chars stored per bot response (token budget)
+
+# ── Named constants (avoid magic numbers) ──
+_OLLAMA_CTX_BASE = 8192
+_OLLAMA_CTX_WITH_PAST = 12288
+_MAX_OUTPUT_TOKENS = 512
+_GEMINI_MAX_RETRIES = 3
+_GEMINI_RETRY_WAIT_BASE = 15  # seconds
+_KEEP_ALIVE_INTERVAL_MIN = 4
+_DISCORD_MSG_LIMIT = 1900
+
+from collections import deque
+# Keyed by (channel_id, user_id) → deque of (question, answer, timestamp)
+_conv_history: dict[tuple[int, int], deque] = {}
+
 SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", (
     "You are a helpful personal calendar assistant. You have access to the user's "
     "calendar events from multiple calendars. Each event is prefixed with a "
@@ -141,12 +208,16 @@ class Event(NamedTuple):
 _cal_cache = {}       # url -> (Calendar, timestamp)
 _CAL_CACHE_TTL = int(os.getenv("CACHE_TTL", "3600"))  # seconds
 
+# Reverse lookup: url -> label (for safe logging without exposing URL tokens)
+_cal_labels = {url: label for label, url in CALENDARS}
+
 def fetch_events(url):
     """Fetch and parse calendar events, with caching."""
     now = time.time()
     cached = _cal_cache.get(url)
     if cached and (now - cached[1]) < _CAL_CACHE_TTL:
         return cached[0]
+    cal_label = _cal_labels.get(url, "unknown")
     try:
         response = requests.get(url, timeout=30)
         response.raise_for_status()
@@ -154,7 +225,7 @@ def fetch_events(url):
         _cal_cache[url] = (cal, now)
         return cal
     except requests.RequestException as e:
-        print(f"Error fetching calendar: {e}")
+        print(f"Error fetching calendar '{cal_label}': {type(e).__name__}: {e.response.status_code if hasattr(e, 'response') and e.response else 'connection failed'}")
         # Return stale cache on error if available
         if cached:
             return cached[0]
@@ -382,10 +453,17 @@ _FUTURE_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# Classification prompt (module-level constant, used by classify_question Tier 2)
+_CLASSIFY_PROMPT = (
+    "Classify this question as needing 'past' calendar events, "
+    "'future' calendar events, or 'both'. Respond with ONLY one word: "
+    "past, future, or both."
+)
+
 def classify_question(question):
     """Classify whether a question needs past events, future events, or both.
     
-    Returns 'past', 'future', or 'ambiguous'.
+    Returns 'past' or 'future'.
     Tier 1: fast keyword regex. Tier 2: LLM fallback for ambiguous.
     """
     has_past = bool(_PAST_PATTERNS.search(question))
@@ -400,53 +478,125 @@ def classify_question(question):
 
     # Tier 2: LLM fallback for ambiguous questions
     try:
-        resp = requests.post(
-            f"{OLLAMA_URL}/api/chat",
-            json={
-                "model": OLLAMA_MODEL,
-                "messages": [
-                    {"role": "system", "content": (
-                        "Classify this question as needing 'past' calendar events, "
-                        "'future' calendar events, or 'both'. Respond with ONLY one word: "
-                        "past, future, or both."
-                    )},
-                    {"role": "user", "content": question},
-                ],
-                "stream": False,
-                "think": False,
-                "options": {"temperature": 0, "num_predict": 16, "num_ctx": 512},
-            },
-            timeout=15,
-        )
-        resp.raise_for_status()
-        answer = resp.json()["message"]["content"].strip().lower()
+        if get_backend() == "gemini":
+            resp = _get_gemini_client().models.generate_content(
+                model=GEMINI_MODEL,
+                contents=question,
+                config={
+                    "system_instruction": _CLASSIFY_PROMPT,
+                    "temperature": 0,
+                    "max_output_tokens": 16,
+                    "thinking_config": {"thinking_budget": 0},
+                },
+            )
+            answer = (resp.text or "").strip().lower()
+        else:
+            resp = requests.post(
+                f"{OLLAMA_URL}/api/chat",
+                json={
+                    "model": OLLAMA_MODEL,
+                    "messages": [
+                        {"role": "system", "content": _CLASSIFY_PROMPT},
+                        {"role": "user", "content": question},
+                    ],
+                    "stream": False,
+                    "think": False,
+                    "options": {"temperature": 0, "num_predict": 16, "num_ctx": 512},
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            answer = resp.json()["message"]["content"].strip().lower()
         if "past" in answer or "both" in answer:
             return "past"
         return "future"
     except Exception as e:
-        print(f"Classification fallback failed: {e}")
+        error_msg = str(e).lower()
+        if "429" in error_msg or "resource_exhausted" in error_msg:
+            print(f"Classification skipped (rate limited) — defaulting to future context")
+        else:
+            print(f"Classification fallback failed: {e}")
         return "future"  # safe default
+
+# ── Conversation history helpers ──
+
+def _get_history(channel_id, user_id):
+    """Return non-stale conversation history as [(question, answer), ...]."""
+    key = (channel_id, user_id)
+    hist = _conv_history.get(key)
+    if not hist:
+        return []
+    now = time.time()
+    # Filter to non-stale entries
+    valid = [(q, a) for q, a, ts in hist if (now - ts) < CONV_HISTORY_TTL]
+    if not valid:
+        del _conv_history[key]
+    return valid
+
+def _store_exchange(channel_id, user_id, question, answer):
+    """Store a Q&A exchange, truncating the answer for token budget."""
+    key = (channel_id, user_id)
+    if key not in _conv_history:
+        _conv_history[key] = deque(maxlen=CONV_HISTORY_TURNS)
+    truncated = answer[:_CONV_ANSWER_TRUNC] + "…" if len(answer) > _CONV_ANSWER_TRUNC else answer
+    _conv_history[key].append((question, truncated, time.time()))
+
+def _estimate_tokens(text):
+    """Rough token estimate: ~4 chars per token."""
+    return len(text) // 4
 
 # ── LLM ──
 
-def ask_llm(question, calendar_context, include_past=False):
+def ask_llm(question, calendar_context, include_past=False, history=None):
     """Send a question + calendar context to Ollama and return the response."""
-    num_ctx = 12288 if include_past else 8192
+    num_ctx = _OLLAMA_CTX_WITH_PAST if include_past else _OLLAMA_CTX_BASE
     system_prompt = f"{SYSTEM_PROMPT}\n\nCALENDAR DATA:\n{calendar_context}"
+
+    # Build multi-turn messages: [system, ...history pairs..., current user]
+    messages = [{"role": "system", "content": system_prompt}]
+    if history:
+        # Token budget check — only bump num_ctx if history doesn't fit in base.
+        # Avoiding unnecessary bumps keeps Ollama's KV cache hot (~5x faster prompt eval).
+        num_predict = _MAX_OUTPUT_TOKENS
+        base_tokens = _estimate_tokens(system_prompt) + _estimate_tokens(question)
+        remaining = num_ctx - num_predict - base_tokens
+        trimmed = []
+        for q, a in history:
+            cost = _estimate_tokens(q) + _estimate_tokens(a)
+            if remaining - cost < 0:
+                break
+            remaining -= cost
+            trimmed.append((q, a))
+        # If history was trimmed AND a ctx bump is configured, retry with more room
+        if len(trimmed) < len(history) and CONV_HISTORY_CTX_BUMP > 0:
+            num_ctx += CONV_HISTORY_CTX_BUMP
+            remaining = num_ctx - num_predict - base_tokens
+            trimmed = []
+            for q, a in history:
+                cost = _estimate_tokens(q) + _estimate_tokens(a)
+                if remaining - cost < 0:
+                    break
+                remaining -= cost
+                trimmed.append((q, a))
+            print(f"[Conv] Bumped num_ctx to {num_ctx} to fit history")
+        if len(trimmed) < len(history):
+            print(f"[Conv] Trimmed history from {len(history)} to {len(trimmed)} exchanges (token budget)")
+        for q, a in trimmed:
+            messages.append({"role": "user", "content": q})
+            messages.append({"role": "assistant", "content": a})
+    messages.append({"role": "user", "content": question})
+
     try:
         resp = requests.post(
             f"{OLLAMA_URL}/api/chat",
             json={
                 "model": OLLAMA_MODEL,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": question},
-                ],
+                "messages": messages,
                 "stream": False,
                 "think": False,
                 "options": {
                     "temperature": 0.3,
-                    "num_predict": 512,
+                    "num_predict": _MAX_OUTPUT_TOKENS,
                     "num_ctx": num_ctx,
                 },
             },
@@ -462,71 +612,127 @@ def ask_llm(question, calendar_context, include_past=False):
         print(f"LLM error: {e}")
         return "❌ Something went wrong with the LLM. Check server logs."
 
+def ask_gemini(question, calendar_context, history=None):
+    """Send a question + calendar context to Gemini and return the response."""
+    from google.genai import types
+    system_prompt = f"{SYSTEM_PROMPT}\n\nCALENDAR DATA:\n{calendar_context}"
+    # Build multi-turn contents list
+    contents = []
+    if history:
+        for q, a in history:
+            contents.append(types.Content(role="user", parts=[types.Part(text=q)]))
+            contents.append(types.Content(role="model", parts=[types.Part(text=a)]))
+    contents.append(types.Content(role="user", parts=[types.Part(text=question)]))
+    last_err = None
+    for attempt in range(_GEMINI_MAX_RETRIES):
+        try:
+            resp = _get_gemini_client().models.generate_content(
+                model=GEMINI_MODEL,
+                contents=contents,
+                config={
+                    "system_instruction": system_prompt,
+                    "temperature": 0.3,
+                    "max_output_tokens": _MAX_OUTPUT_TOKENS,
+                },
+            )
+            text = resp.text
+            if text:
+                return text
+            return "I couldn't generate a response. Try rephrasing your question."
+        except Exception as e:
+            last_err = e
+            error_msg = str(e).lower()
+            if "429" in error_msg or "resource_exhausted" in error_msg:
+                if attempt < _GEMINI_MAX_RETRIES - 1:
+                    wait = (attempt + 1) * _GEMINI_RETRY_WAIT_BASE
+                    print(f"Gemini rate limited, retrying in {wait}s (attempt {attempt + 1}/3)")
+                    time.sleep(wait)
+                    continue
+                return "⏳ Gemini rate limit reached — try again in a minute."
+            if "api key" in error_msg or "401" in error_msg or "403" in error_msg:
+                return "🔑 Gemini API key is invalid or expired. Check your GEMINI_API_KEY."
+            print(f"Gemini error: {e}")
+            return "❌ Something went wrong with Gemini. Check server logs."
+    print(f"Gemini error after retries: {last_err}")
+    return "❌ Something went wrong with Gemini. Check server logs."
+
+def ask_backend(question, calendar_context, include_past=False, history=None):
+    """Route LLM calls to the configured backend."""
+    if get_backend() == "gemini":
+        return ask_gemini(question, calendar_context, history=history)
+    return ask_llm(question, calendar_context, include_past, history=history)
+
 # ── Scheduled notifications ──
 
 def send_work_update():
     """Triggered weeknights for tomorrow's work schedule."""
-    print("Fetching fresh work schedule...")
-    now = datetime.now(TZ)
-    tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0)
-    end_of_tomorrow = tomorrow.replace(hour=23, minute=59, second=59)
+    try:
+        print("Fetching fresh work schedule...")
+        now = datetime.now(TZ)
+        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0)
+        end_of_tomorrow = tomorrow.replace(hour=23, minute=59, second=59)
 
-    all_events = []
-    for label, url in CALENDARS:
-        if label not in WORK_LABELS:
-            continue
-        cal = fetch_events(url)
-        if cal:
-            all_events += get_upcoming_events(cal, tomorrow, end_of_tomorrow)
+        all_events = []
+        for label, url in CALENDARS:
+            if label not in WORK_LABELS:
+                continue
+            cal = fetch_events(url)
+            if cal:
+                all_events += get_upcoming_events(cal, tomorrow, end_of_tomorrow)
 
-    all_events.sort(key=lambda x: x.dt)
-    lines = format_events_for_notification(all_events)
-    msg = "\n".join(lines) if lines else "No meetings tomorrow! 🎉"
+        all_events.sort(key=lambda x: x.dt)
+        lines = format_events_for_notification(all_events)
+        msg = "\n".join(lines) if lines else "No meetings tomorrow! 🎉"
 
-    result = apobj.notify(
-        title=f"📅 Work Schedule for {tomorrow.strftime('%A, %b %d')}",
-        body=msg,
-    )
-    if not result:
-        print("Warning: Weeknight digest notification failed to send.")
+        result = apobj.notify(
+            title=f"📅 Work Schedule for {tomorrow.strftime('%A, %b %d')}",
+            body=msg,
+        )
+        if not result:
+            print("Warning: Weeknight digest notification failed to send.")
+    except Exception as e:
+        print(f"Error in weeknight digest: {e}")
 
 def send_weekend_update():
     """Triggered Thursday for weekend context."""
-    print("Fetching weekend plans...")
-    cal_data = []
-    for label, url in CALENDARS:
-        cal = fetch_events(url)
-        if cal:
-            cal_data.append((label, cal))
+    try:
+        print("Fetching weekend plans...")
+        cal_data = []
+        for label, url in CALENDARS:
+            cal = fetch_events(url)
+            if cal:
+                cal_data.append((label, cal))
 
-    now = datetime.now(TZ)
-    # Find the upcoming Friday (or today if it's already Friday)
-    days_until_friday = (4 - now.weekday()) % 7
-    friday = (now + timedelta(days=days_until_friday)).replace(hour=0, minute=0, second=0)
+        now = datetime.now(TZ)
+        # Find the upcoming Friday (or today if it's already Friday)
+        days_until_friday = (4 - now.weekday()) % 7
+        friday = (now + timedelta(days=days_until_friday)).replace(hour=0, minute=0, second=0)
 
-    sections = []
-    for offset in range(3):
-        day_start = (friday + timedelta(days=offset)).replace(hour=0, minute=0, second=0)
-        day_end = day_start.replace(hour=23, minute=59, second=59)
-        day_events = []
-        for label, cal in cal_data:
-            day_events += get_upcoming_events(cal, day_start, day_end)
-        day_events = sorted(set(day_events), key=lambda x: x.dt)
-        label = day_start.strftime("%A, %b %d")
-        lines = format_events_for_notification(day_events)
-        if lines:
-            sections.append(f"── {label} ──\n" + "\n".join(lines))
-        else:
-            sections.append(f"── {label} ──\nNothing planned")
+        sections = []
+        for offset in range(3):
+            day_start = (friday + timedelta(days=offset)).replace(hour=0, minute=0, second=0)
+            day_end = day_start.replace(hour=23, minute=59, second=59)
+            day_events = []
+            for label, cal in cal_data:
+                day_events += get_upcoming_events(cal, day_start, day_end)
+            day_events = sorted(set(day_events), key=lambda x: x.dt)
+            label = day_start.strftime("%A, %b %d")
+            lines = format_events_for_notification(day_events)
+            if lines:
+                sections.append(f"── {label} ──\n" + "\n".join(lines))
+            else:
+                sections.append(f"── {label} ──\nNothing planned")
 
-    msg = "\n\n".join(sections)
+        msg = "\n\n".join(sections)
 
-    result = apobj.notify(
-        title="🚀 Weekend Preview (Fri-Sun)",
-        body=msg,
-    )
-    if not result:
-        print("Warning: Weekend preview notification failed to send.")
+        result = apobj.notify(
+            title="🚀 Weekend Preview (Fri-Sun)",
+            body=msg,
+        )
+        if not result:
+            print("Warning: Weekend preview notification failed to send.")
+    except Exception as e:
+        print(f"Error in weekend preview digest: {e}")
 
 # ── Discord bot ──
 
@@ -555,6 +761,7 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 
 _scheduler_started = False
+_scheduler_lock = asyncio.Lock()
 _ready_at = None
 
 @client.event
@@ -564,21 +771,23 @@ async def on_ready():
     print(f"Discord bot logged in as {client.user}")
     if DISCORD_ALLOWED_USERS:
         print(f"  Allowed users: {DISCORD_ALLOWED_USERS}")
-    if not _scheduler_started:
-        scheduler = AsyncIOScheduler(timezone=TZ)
-        if _weeknight:
-            days, h, m = _weeknight
-            scheduler.add_job(_async_send_work_update, "cron", day_of_week=days, hour=h, minute=m)
-            print(f"  Weeknight digest: {days} at {h:02d}:{m:02d}")
-        if _weekend:
-            days, h, m = _weekend
-            scheduler.add_job(_async_send_weekend_update, "cron", day_of_week=days, hour=h, minute=m)
-            print(f"  Weekend preview: {days} at {h:02d}:{m:02d}")
-        # Keep the LLM model loaded in memory (ping every 4 minutes)
-        scheduler.add_job(_async_keep_model_alive, "interval", minutes=4)
-        scheduler.start()
-        _scheduler_started = True
-        print("Scheduler started.")
+    async with _scheduler_lock:
+        if not _scheduler_started:
+            scheduler = AsyncIOScheduler(timezone=TZ)
+            if _weeknight:
+                days, h, m = _weeknight
+                scheduler.add_job(_async_send_work_update, "cron", day_of_week=days, hour=h, minute=m)
+                print(f"  Weeknight digest: {days} at {h:02d}:{m:02d}")
+            if _weekend:
+                days, h, m = _weekend
+                scheduler.add_job(_async_send_weekend_update, "cron", day_of_week=days, hour=h, minute=m)
+                print(f"  Weekend preview: {days} at {h:02d}:{m:02d}")
+            # Keep the Ollama model loaded in memory
+            if get_backend() == "ollama":
+                scheduler.add_job(_async_keep_model_alive, "interval", minutes=_KEEP_ALIVE_INTERVAL_MIN)
+            scheduler.start()
+            _scheduler_started = True
+            print("Scheduler started.")
 
 @client.event
 async def on_message(message):
@@ -604,25 +813,66 @@ async def on_message(message):
     if not question:
         return
 
+    # Normalize smart quotes/punctuation that mobile keyboards may inject
+    question = question.replace("\u201c", '"').replace("\u201d", '"').replace("\u2018", "'").replace("\u2019", "'")
+
+    # !backend command — show or switch LLM backend
+    _backend_map = {"1": "ollama", "2": "gemini"}
+    if question.lower().startswith("!backend"):
+        parts = question.split(maxsplit=1)
+        if len(parts) == 1:
+            current = get_backend()
+            mark = lambda name: "▸" if name == current else " "
+            await message.reply(
+                f"{mark('ollama')} **1.** ollama (`{OLLAMA_MODEL}`){' ← current' if current == 'ollama' else ''}\n"
+                f"{mark('gemini')} **2.** gemini (`{GEMINI_MODEL}`){' ← current' if current == 'gemini' else ''}\n"
+                f"Switch: `!backend 1` or `!backend 2`"
+            )
+        else:
+            target = _backend_map.get(parts[1].strip(), parts[1].strip().lower())
+            try:
+                set_backend(target)
+                # Clear conversation history on backend switch
+                hist_key = (message.author.id if is_dm else message.channel.id, message.author.id)
+                _conv_history.pop(hist_key, None)
+                await message.reply(f"Switched to **{get_backend()}**")
+                print(f"[Backend] Switched to {get_backend()} by {message.author}")
+            except (ValueError, RuntimeError) as e:
+                await message.reply(f"Failed: {e}")
+        return
+
     print(f"[Chat] {message.author}: {question}")
-    async with message.channel.typing():
-        # Classify whether the question needs past events (skip if history disabled)
-        include_past = False
-        if HISTORY_DAYS > 0:
-            classification = await asyncio.to_thread(classify_question, question)
-            include_past = classification == "past"
-            if include_past:
-                print(f"[Chat] Including past events (classification: {classification})")
-        # Run blocking calendar fetch + LLM call in a thread
-        calendar_context = await asyncio.to_thread(build_context, include_past)
-        answer = await asyncio.to_thread(ask_llm, question, calendar_context, include_past)
+    # Use author ID as channel key for DMs (DM channel IDs can change)
+    hist_chan = message.author.id if is_dm else message.channel.id
+    try:
+        async with message.channel.typing():
+            # Classify whether the question needs past events (skip if history disabled)
+            include_past = False
+            if HISTORY_DAYS > 0:
+                classification = await asyncio.to_thread(classify_question, question)
+                include_past = classification == "past"
+                if include_past:
+                    print(f"[Chat] Including past events (classification: {classification})")
+            # Retrieve conversation history for follow-ups
+            history = _get_history(hist_chan, message.author.id)
+            if history:
+                print(f"[Conv] Including {len(history)} previous exchange(s)")
+            # Run blocking calendar fetch + LLM call in a thread
+            calendar_context = await asyncio.to_thread(build_context, include_past)
+            answer = await asyncio.to_thread(ask_backend, question, calendar_context, include_past, history)
 
-    print(f"[Chat] Reply ({len(answer)} chars): {answer[:100]}...")
-    # Discord has a 2000 char limit
-    if len(answer) > 1900:
-        answer = answer[:1900] + "\n…(truncated)"
+        # Store exchange for future follow-ups
+        _store_exchange(hist_chan, message.author.id, question, answer)
 
-    await message.reply(answer)
+        print(f"[Chat] Reply ({len(answer)} chars): {answer[:100]}...")
+        # Discord has a 2000 char limit
+        if len(answer) > _DISCORD_MSG_LIMIT:
+            answer = answer[:_DISCORD_MSG_LIMIT] + "\n…(truncated)"
+
+        await message.reply(answer)
+    except Exception as e:
+        print(f"[Chat] Error handling message from {message.author}: {e}")
+        await message.reply("❌ Something went wrong processing your question. Please try again.")
 
 # ── Main entry point ──
 

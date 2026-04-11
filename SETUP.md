@@ -2,21 +2,97 @@
 
 Complete deployment instructions for Personal Context Bot. The recommended approach is Docker — it handles dependencies, auto-restarts on reboot, and keeps your host clean. A local (non-Docker) option is also provided.
 
+> **Fastest path:** If you just want to try it out, use Gemini (no installs needed — just an API key). See [Step 4 Option B](#option-b-google-gemini-cloud--no-gpu-required).
+
 ---
 
 ## Prerequisites
 
-- A machine to run both the bot and Ollama (Mac or Linux PC)
+- A machine to run the bot (Mac or Linux PC)
 - [Docker and Docker Compose](https://docs.docker.com/get-started/get-docker/) (recommended) or Python 3.10+
 - A Discord server you control
+- Either [Ollama](https://ollama.com/) installed locally **or** a free [Gemini API key](https://aistudio.google.com/app/apikey)
 
 ---
 
-## 1. Set Up Ollama (LLM)
+## 1. Get Calendar URLs
+
+Set at least one calendar. All three (plus extras) can be used simultaneously.
+
+### iCloud
+
+1. Open **Calendar** on macOS or iCloud.com
+2. Right-click a calendar → **Share Calendar** → check **Public Calendar**
+3. Copy the `webcal://` URL
+
+### Outlook 365
+
+1. Go to [Outlook Web](https://outlook.office365.com/calendar)
+2. Settings (gear) → **Calendar** → **Shared calendars**
+3. Under **Publish a calendar**, select your calendar → **ICS** → **Publish**
+4. Copy the ICS link
+
+### Google Calendar
+
+1. Go to [Google Calendar](https://calendar.google.com) → Settings (gear)
+2. Click the calendar you want to add (left sidebar)
+3. Scroll to **Integrate calendar**
+4. Copy the **Secret address in iCal format** (not the public one, unless the calendar is public)
+
+### Other ICS Feeds
+
+Any standard ICS/iCal URL works. Set `CALENDAR_1_URL` and `CALENDAR_1_LABEL` in `.env` (up to 9 extra calendars).
+
+---
+
+## 2. Create a Discord Bot
+
+1. Go to [discord.com/developers/applications](https://discord.com/developers/applications) → **New Application** → name it → **Create**
+2. **Bot** tab:
+   - Click **Reset Token** → copy the token (you'll need this for `DISCORD_BOT_TOKEN`)
+   - Enable **Message Content Intent** under Privileged Gateway Intents
+   - Save Changes
+3. **OAuth2** tab:
+   - Under **Scopes**, check `bot`
+   - Under **Bot Permissions**, check:
+     - `Send Messages`
+     - `Read Message History`
+     - `View Channels`
+   - Copy the generated URL → open it in your browser → add the bot to your server
+4. **Get the channel ID:**
+   - Discord → User Settings → Advanced → enable **Developer Mode**
+   - Right-click the channel you want the bot to listen in → **Copy Channel ID**
+
+> **Important:** After adding the bot to your server, make sure it has permissions in your target channel. Right-click the channel → Edit Channel → Permissions → add the bot role → enable View Channel, Send Messages, and Read Message History.
+
+---
+
+## 3. Set Up Notifications (optional)
+
+Scheduled digests (weeknight, weekend preview) are sent via [Apprise](https://github.com/caronc/apprise/wiki), which supports 90+ notification services. If you don't want scheduled digests, skip this step — set `WEEKNIGHT_SCHEDULE=off` and `WEEKEND_SCHEDULE=off` in `.env`.
+
+### Discord Webhook
+
+1. In your Discord server, go to the channel for notifications
+2. Edit Channel → **Integrations** → **Webhooks** → **New Webhook**
+3. Copy the webhook URL — it looks like `https://discord.com/api/webhooks/123456/abcdef`
+4. Convert to Apprise format: `discord://123456/abcdef` (replace the `https://discord.com/api/webhooks/` prefix with `discord://`)
+
+### Other Services
+
+Apprise supports Telegram, Slack, email, Pushover, and [many more](https://github.com/caronc/apprise/wiki). See the wiki for URL formats.
+
+---
+
+## 4. Set Up Your LLM Backend
+
+Choose **one** of the two options below:
+
+### Option A: Ollama (Local — Private, No Internet Required)
 
 Ollama runs on the **same machine** as the bot container. The Docker container reaches it via `host.docker.internal` (macOS/Windows) or a host-gateway alias (Linux).
 
-### Install Ollama
+#### Install Ollama
 
 **macOS:**
 
@@ -30,7 +106,7 @@ brew install ollama
 curl -fsSL https://ollama.com/install.sh | sh
 ```
 
-### Choose a Gemma 4 Model
+#### Choose a Gemma 4 Model
 
 All models in the Gemma 4 family support text + image input, native system prompts, and configurable thinking modes. Pick based on your hardware:
 
@@ -43,13 +119,13 @@ All models in the Gemma 4 family support text + image input, native system promp
 
 > **Recommendation:** Start with **`gemma4:e4b`**. It's Google's edge-optimized model (4.5B effective parameters, 128K context) and responds in 5–15 seconds on an M2 Air. The `e2b` variant is viable on 8 GB machines but noticeably less capable. The `26b` MoE model is more accurate but takes 30–60 seconds per reply — too slow for chat.
 
-### Pull the Model
+#### Pull the Model
 
 ```bash
 ollama pull gemma4:e4b
 ```
 
-### Start Ollama
+#### Start Ollama
 
 Ollama must listen on all interfaces (`0.0.0.0`) so the bot container can reach it:
 
@@ -89,7 +165,7 @@ caffeinate -s &
 
 > The bot gracefully handles the Ollama host being unreachable — it replies with a friendly offline message instead of crashing.
 
-### Verify Ollama Is Running
+#### Verify Ollama Is Running
 
 ```bash
 curl http://localhost:11434/api/tags
@@ -97,74 +173,16 @@ curl http://localhost:11434/api/tags
 
 You should see a JSON response listing your model.
 
----
+### Option B: Google Gemini (Cloud — No GPU Required)
 
-## 2. Create a Discord Bot
+If you don't want to run a local LLM, you can use Google's Gemini API instead. It's fast, free-tier friendly, and requires no GPU.
 
-1. Go to [discord.com/developers/applications](https://discord.com/developers/applications) → **New Application** → name it → **Create**
-2. **Bot** tab:
-   - Click **Reset Token** → copy the token (you'll need this for `DISCORD_BOT_TOKEN`)
-   - Enable **Message Content Intent** under Privileged Gateway Intents
-   - Save Changes
-3. **OAuth2** tab:
-   - Under **Scopes**, check `bot`
-   - Under **Bot Permissions**, check:
-     - `Send Messages`
-     - `Read Message History`
-     - `View Channels`
-   - Copy the generated URL → open it in your browser → add the bot to your server
-4. **Get the channel ID:**
-   - Discord → User Settings → Advanced → enable **Developer Mode**
-   - Right-click the channel you want the bot to listen in → **Copy Channel ID**
+1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey) and create an API key
+2. Save it — you'll set `LLM_BACKEND=gemini` and `GEMINI_API_KEY` in the next step
 
-> **Important:** After adding the bot to your server, make sure it has permissions in your target channel. Right-click the channel → Edit Channel → Permissions → add the bot role → enable View Channel, Send Messages, and Read Message History.
-
----
-
-## 3. Get Calendar URLs
-
-Set at least one calendar. All three (plus extras) can be used simultaneously.
-
-### iCloud
-
-1. Open **Calendar** on macOS or iCloud.com
-2. Right-click a calendar → **Share Calendar** → check **Public Calendar**
-3. Copy the `webcal://` URL
-
-### Outlook 365
-
-1. Go to [Outlook Web](https://outlook.office365.com/calendar)
-2. Settings (gear) → **Calendar** → **Shared calendars**
-3. Under **Publish a calendar**, select your calendar → **ICS** → **Publish**
-4. Copy the ICS link
-
-### Google Calendar
-
-1. Go to [Google Calendar](https://calendar.google.com) → Settings (gear)
-2. Click the calendar you want to add (left sidebar)
-3. Scroll to **Integrate calendar**
-4. Copy the **Secret address in iCal format** (not the public one, unless the calendar is public)
-
-### Other ICS Feeds
-
-Any standard ICS/iCal URL works. Set `CALENDAR_1_URL` and `CALENDAR_1_LABEL` in `.env` (up to 9 extra calendars).
-
----
-
-## 4. Set Up Notifications (optional)
-
-Scheduled digests (weeknight, weekend preview) are sent via [Apprise](https://github.com/caronc/apprise/wiki), which supports 90+ notification services. If you don't want scheduled digests, skip this step — set `WEEKNIGHT_SCHEDULE=off` and `WEEKEND_SCHEDULE=off` in `.env`.
-
-### Discord Webhook
-
-1. In your Discord server, go to the channel for notifications
-2. Edit Channel → **Integrations** → **Webhooks** → **New Webhook**
-3. Copy the webhook URL — it looks like `https://discord.com/api/webhooks/123456/abcdef`
-4. Convert to Apprise format: `discord://123456/abcdef` (replace the `https://discord.com/api/webhooks/` prefix with `discord://`)
-
-### Other Services
-
-Apprise supports Telegram, Slack, email, Pushover, and [many more](https://github.com/caronc/apprise/wiki). See the wiki for URL formats.
+> **Free tier limits:** Gemini 2.5 Flash allows ~5 requests/minute on the free tier. For a personal calendar bot this is more than enough. The bot includes automatic retry with backoff for rate limits.
+>
+> **Privacy note:** Unlike Ollama, Gemini sends your calendar data to Google's servers for processing. If privacy is a priority, use Ollama instead.
 
 ---
 
@@ -174,29 +192,11 @@ Apprise supports Telegram, Slack, email, Pushover, and [many more](https://githu
 cp .env.example .env
 ```
 
-Open `.env` in your editor. The file is self-documented with comments explaining every variable, grouped into numbered sections matching this guide:
+Open `.env` in your editor and fill in the values you gathered from steps 1–4. The sections appear in the same order as the steps above — work through them top to bottom.
 
-1. **Calendar URLs** — at least one required
-2. **Discord Bot** — for interactive LLM chat (optional)
-3. **Notifications** — for scheduled digests (optional)
-4. **Ollama LLM** — endpoint and model
+Everything below the "Optional" divider has sensible defaults. Each variable has an inline comment explaining what it does.
 
-Everything below those sections is optional with sensible defaults (timezone, digest schedules, work/personal labels, event filtering, history, LLM prompt, etc.). The comments in `.env.example` include examples and explain how each setting works.
-
-### History (Past Events)
-
-The bot automatically detects when a question is about the past (e.g. "what did I have yesterday?", "recap last week") and includes historical calendar data in the LLM context. This is controlled by two variables:
-
-| Variable | Default | Description |
-|---|---|---|
-| `HISTORY_DAYS` | `10` | How many days of past events are available for history questions |
-| `HISTORY_CACHE_TTL` | `21600` (6h) | Cache duration for past events — longer than future since past rarely changes |
-
-Set `HISTORY_DAYS=0` to disable history entirely.
-
-> **Note:** Past event availability depends on your calendar provider. Some providers prune old events from ICS feeds. The bot logs a warning at startup if a calendar returns no past events — check `docker compose logs context-bot` to verify.
-
-> **Docker networking:** `host.docker.internal` (the default `OLLAMA_URL`) resolves to the host machine from inside a Docker container on macOS and Windows. On Linux, `docker-compose.yaml` includes an `extra_hosts` entry that maps it automatically. If running without Docker, change it to `http://localhost:11434`.
+> **Note:** Past event availability (`HISTORY_DAYS`) depends on your calendar provider — some prune old events from ICS feeds. The bot logs a warning at startup if a calendar returns no past events.
 
 ---
 
@@ -204,7 +204,7 @@ Set `HISTORY_DAYS=0` to disable history entirely.
 
 ### Option A: Docker (Recommended)
 
-Requires Docker and Docker Compose on the host machine. Ollama must be running on the same machine — the container reaches it via `host.docker.internal:11434`.
+Requires Docker and Docker Compose on the host machine. If using Ollama, it must be running on the same machine — the container reaches it via `host.docker.internal:11434`.
 
 **Build and start:**
 
