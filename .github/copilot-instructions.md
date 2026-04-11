@@ -22,6 +22,7 @@ Use this exact local reboot sequence to avoid duplicate Discord replies:
 # stop local + docker instances
 pkill -9 -f "python3 main.py" 2>/dev/null; pkill -9 -f "Python main.py" 2>/dev/null; sleep 1
 docker stop scout_report 2>/dev/null || true
+docker stop context_bot 2>/dev/null || true  # legacy container name
 
 # start local bot (override Docker-specific OLLAMA_URL from .env)
 set -a && source .env && set +a && export OLLAMA_URL=http://localhost:11434 && .venv/bin/python3 main.py
@@ -31,7 +32,7 @@ Verify after start:
 
 ```bash
 ps aux | grep "[p]ython.*main.py"
-docker ps --format '{{.Names}}' | grep -x 'scout_report' || true
+docker ps --format '{{.Names}}' | egrep '^(scout_report|context_bot)$' || true
 ```
 
 Healthy startup logs must include:
