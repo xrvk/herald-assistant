@@ -823,9 +823,9 @@ async def on_message(message):
         if len(parts) == 1:
             current = get_backend()
             await message.reply(
-                f"1. Ollama - model: {OLLAMA_MODEL}{' <-- Current' if current == 'ollama' else ''}\n"
-                f"2. Gemini - model: {GEMINI_MODEL}{' <-- Current' if current == 'gemini' else ''}\n\n"
-                "Switch with: !backend 1 or !backend 2"
+                f"1. **Ollama** - model: `{OLLAMA_MODEL}`{' <-- Current' if current == 'ollama' else ''}\n"
+                f"2. **Gemini** - model: `{GEMINI_MODEL}`{' <-- Current' if current == 'gemini' else ''}\n\n"
+                "Switch with: `!backend 1` or `!backend 2`"
             )
         else:
             target = _backend_map.get(parts[1].strip(), parts[1].strip().lower())

@@ -16,21 +16,27 @@ Per-user/channel in-memory history (`_conv_history` dict of deques). `_get_histo
 
 ## Bot Process Management
 
-**CRITICAL**: Before starting the bot locally, ALWAYS check for and kill existing bot processes AND Docker containers:
-```bash
-# Kill local Python processes
-ps aux | grep "[p]ython.*main.py"
-pkill -9 -f "python3 main.py" 2>/dev/null; pkill -9 -f "Python main.py" 2>/dev/null; sleep 1
-# Stop Docker container (uses restart: always, so stop not just kill)
-docker stop scout_report 2>/dev/null
-```
-Multiple bot processes with the same Discord token = duplicate responses. `pkill` may miss other terminal sessions — verify with `ps aux`, use `kill -9 <PID>` on survivors. Docker container has `restart: always` so it auto-restarts after `docker kill` — use `docker stop` instead.
+Use this exact local reboot sequence to avoid duplicate Discord replies:
 
-Local launch (not Docker):
 ```bash
+# stop local + docker instances
+pkill -9 -f "python3 main.py" 2>/dev/null; pkill -9 -f "Python main.py" 2>/dev/null; sleep 1
+docker stop scout_report 2>/dev/null || true
+
+# start local bot (override Docker-specific OLLAMA_URL from .env)
 set -a && source .env && set +a && export OLLAMA_URL=http://localhost:11434 && .venv/bin/python3 main.py
 ```
-`OLLAMA_URL` override needed — `.env` has `host.docker.internal` for Docker.
+
+Verify after start:
+
+```bash
+ps aux | grep "[p]ython.*main.py"
+docker ps --format '{{.Names}}' | grep -x 'scout_report' || true
+```
+
+Healthy startup logs must include:
+- `Discord bot logged in as ...`
+- `Scheduler started.`
 
 ## Rules
 
