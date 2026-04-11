@@ -77,7 +77,7 @@ All config lives in a single `.env` file — copy [.env.example](.env.example) a
 | Variable | When required | Description |
 |---|---|---|
 | `GEMINI_API_KEY` | Using Gemini (default setup) | Google Gemini API key — [get one free](https://aistudio.google.com/app/apikey) |
-| `GEMINI_MODEL` | Using Gemini (default setup) | Gemini model (default `gemini-2.5-flash`) |
+| `GEMINI_MODEL` | Using Gemini (default setup) | Gemini model (default `gemini-2.5-flash-lite`) |
 | `DISCORD_BOT_TOKEN` | Using interactive chat | Discord bot token (omit for notification-only mode) |
 | `APPRISE_URL` | Sending scheduled digests | Notification URL — required when `WEEKNIGHT_SCHEDULE` or `WEEKEND_SCHEDULE` ≠ `off` |
 

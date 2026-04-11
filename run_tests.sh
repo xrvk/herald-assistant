@@ -5,6 +5,7 @@
 #   ./run_tests.sh              # unit tests only (no bot needed)
 #   ./run_tests.sh --live       # unit + live Discord integration tests
 #   ./run_tests.sh --live-only  # live integration tests only
+#   ./run_tests.sh --benchmark  # Gemini model latency benchmark (needs GEMINI_API_KEY)
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -31,6 +32,11 @@ case "${1:-}" in
         echo "━━━ Live Integration Tests ━━━"
         set -a && source .env && set +a
         "${VENV}/python" tests/test_integration.py
+        ;;
+    --benchmark)
+        echo "━━━ Gemini Model Benchmark ━━━"
+        set -a && source .env && set +a
+        "$PYTEST" tests/test_gemini_models.py -v -s
         ;;
     *)
         echo "━━━ Unit Tests ━━━"

@@ -117,7 +117,7 @@ No GPU, no local installs, no setup beyond an API key. The free tier is generous
 1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey) and create an API key
 2. Set `GEMINI_API_KEY` in your `.env` — that's it. `LLM_BACKEND=gemini` is already the default.
 
-> **Free tier limits:** Gemini 2.5 Flash allows ~5 requests/minute on the free tier. For a personal calendar bot this is more than enough. The bot includes automatic retry with backoff for rate limits.
+> **Free tier limits:** Gemini 2.5 Flash-Lite allows ~15 requests/minute on the free tier (3× more than Flash). For a personal calendar bot this is more than enough. The bot includes automatic retry with backoff for rate limits.
 >
 > **Privacy note:** Gemini sends your calendar data to Google's servers for processing. If privacy is a priority, use Ollama instead.
 
@@ -336,7 +336,7 @@ nohup python main.py > bot.log 2>&1 &
 **Healthy startup logs look like:**
 
 ```
-LLM backend: Gemini (gemini-2.5-flash)
+LLM backend: Gemini (gemini-2.5-flash-lite)
 Loaded 1 calendar(s): Personal
   Personal calendars: Personal
 ────────────────────────────────────────
@@ -364,7 +364,7 @@ If the bot doesn't respond:
 |---|---|
 | Bot doesn't respond to messages | Check channel permissions — the bot needs View Channel, Send Messages, and Read Message History explicitly set |
 | Bot starts but ignores messages | Verify `DISCORD_CHANNEL_ID` matches the actual channel (right-click channel → Copy Channel ID with Developer Mode enabled) |
-| Gemini rate limit error | Free tier is ~5 RPM; the bot retries automatically. If persistent, check your API key quota at [Google AI Studio](https://aistudio.google.com/app/apikey) |
+| Gemini rate limit error | Free tier is ~15 RPM for Flash-Lite; the bot retries automatically. If persistent, check your API key quota at [Google AI Studio](https://aistudio.google.com/app/apikey) |
 | LLM times out (Ollama) | Model may be cold-loading; try again in 30s. If persistent, switch to a smaller model (`gemma4:e2b`) |
 | LLM offline message (Ollama) | Ollama isn't running, Mac is asleep, or `OLLAMA_URL` is wrong. Run `curl http://IP:11434` to test |
 | Multiple replies to one message | Kill all bot processes and restart — only one instance should run at a time |

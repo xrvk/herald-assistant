@@ -24,7 +24,7 @@ if _llm_backend not in ("ollama", "gemini"):
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 _gemini_client = None
 _gemini_api_key = os.getenv("GEMINI_API_KEY")
 
@@ -164,7 +164,7 @@ else:
     apobj = None
 
 # ── LLM / prompt configuration ──
-CONTEXT_DAYS = int(os.getenv("CONTEXT_DAYS", "7"))
+CONTEXT_DAYS = int(os.getenv("CONTEXT_DAYS", "16"))
 HISTORY_DAYS = int(os.getenv("HISTORY_DAYS", "10"))
 HISTORY_CACHE_TTL = int(os.getenv("HISTORY_CACHE_TTL", "21600"))  # 6 hours
 
