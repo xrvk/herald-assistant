@@ -12,7 +12,7 @@ Ollama (local) or Gemini (cloud) via `LLM_BACKEND` env var. `get_backend()`/`set
 
 ## Conversation History
 
-Per-user/channel in-memory history (`_conv_history` dict of deques). `_get_history()`/`_store_exchange()` helpers. Bot answers truncated to 500 chars before storage. TTL-based staleness (`CONV_HISTORY_TTL`, default 30 min). Ollama: `num_ctx` bumped by `CONV_HISTORY_CTX_BUMP` (default 4096) only when history overflows base window (avoids KV cache reload penalty); oldest exchanges dropped first if token budget exceeded. Gemini: history passed as `types.Content` list, no token concerns. `!backend` switch clears history. DMs keyed by `author.id` (not channel ID).
+Per-user/channel in-memory history (`_conv_history` dict of deques). `_get_history()`/`_store_exchange()` helpers. Bot answers truncated to 500 chars before storage. TTL-based staleness (`CONV_HISTORY_TTL`, default 30 min). Ollama: `num_ctx` bumped by `CONV_HISTORY_CTX_BUMP` (default 4096) only when history overflows base window (avoids KV cache reload penalty); oldest exchanges dropped first if token budget exceeded. Gemini: history passed as `types.Content` list, no token concerns. `!switch` clears history. DMs keyed by `author.id` (not channel ID).
 
 ## Bot Process Management
 
@@ -39,6 +39,28 @@ Healthy startup logs must include:
 - `Discord bot logged in as ...`
 - `Scheduler started.`
 
+## Bot Commands
+
+`.` also accepted as prefix (e.g., `.llm`, `.switch`). Smart-quote normalization for mobile keyboards.
+
+| Command | Action |
+|---------|--------|
+| `!llm` | Show current backend + models |
+| `!switch [g\|o]` | Switch backend. No arg = toggle |
+| `!cal` | List connected calendars |
+| `!demo` / `!demo off` | Activate/deactivate synthetic demo calendars from `tests/demo_calendars.py` |
+
+## Demo Mode
+
+`!demo` injects synthetic calendars via `__demo_*` fake URLs stored directly in `_cal_cache`. `fetch_events()` has a guard: `url.startswith("__demo_")` returns cached data without HTTP fetch. Real calendars saved on `on_message._real_calendars`; `!demo off` restores them.
+
+## Test Suite
+
+- `tests/test_unit.py` — 33 unit tests, no bot/network needed. Run: `pytest tests/test_unit.py -v`
+- `tests/test_integration.py` — live Discord integration tests (needs running bot + `.env`)
+- `tests/demo_calendars.py` — synthetic calendar generators (`generate_work_ics()`, `generate_personal_ics()`, `calendar_stats()`)
+- `run_tests.sh` — runner: `./run_tests.sh` (unit only), `./run_tests.sh --live` (unit + integration)
+
 ## Rules
 
 - Never log full calendar URLs (contain auth tokens). Use `_cal_labels`.
@@ -49,4 +71,5 @@ Healthy startup logs must include:
 - Discord replies truncated at 1900 chars (2000 limit). Scheduled digests require `APPRISE_URL`.
 - `HISTORY_DAYS=0` disables past-event classification entirely. Cache TTLs are in seconds (default 3600).
 - At least one calendar URL must be configured or startup crashes.
+- Startup prints a summary banner (LLM backend, calendars, schedules, history config).
 - Timeouts are hard-coded: calendar fetch 30s, Ollama chat 120s, classification 15s.
