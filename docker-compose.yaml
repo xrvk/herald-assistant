@@ -23,3 +23,33 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # ── Optional: Signal sidecar ──
+  # Enables Signal notifications and interactive messaging via signal-cli REST API.
+  # See SETUP.md §3 for registration steps.
+  #
+  # Start with:  docker compose --profile signal up -d
+  # Stop with:   docker compose --profile signal down
+  #
+  # After first launch, register your number by opening:
+  #   http://localhost:8080/v1/qrcodelink?device_name=herald
+  # then scan the QR code in Signal app → Settings → Linked Devices → Add.
+  signal-cli-rest-api:
+    image: bbernhard/signal-cli-rest-api:latest
+    profiles: [signal]
+    container_name: signal_cli_rest_api
+    restart: always
+    ports:
+      - "8080:8080"
+    volumes:
+      - signal-cli-config:/home/.local/share/signal-cli
+    environment:
+      - MODE=native
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+volumes:
+  signal-cli-config:

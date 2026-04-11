@@ -39,10 +39,15 @@ Runs as a Docker container with your choice of LLM backend.
 │  │Gemini API  │   │Ollama (local)│  │
 │  │(cloud)     │   │gemma4:e4b    │  │
 │  └────────────┘   └──────────────┘  │
+│                                     │
+│  ┌───────────────────────────────┐  │
+│  │ Docker: signal-cli-rest-api   │  │  ← optional (--profile signal)
+│  │ (Signal notification sidecar) │  │
+│  └───────────────────────────────┘  │
 └─────────────┬───────────────────────┘
               │
               ▼
-         Discord API
+   Discord API / Signal
 ```
 
 Set `LLM_BACKEND=gemini` (default) for Google's cloud API (fast, free tier, no GPU required), or `LLM_BACKEND=ollama` for local, privacy-preserving inference.
@@ -116,7 +121,9 @@ Any ICS/iCal feed works — iCloud, Outlook 365, Google Calendar, or custom URLs
 
 ## Notification Targets
 
-Scheduled digests are sent via [Apprise](https://github.com/caronc/apprise/wiki), which supports Discord webhooks, Telegram, Slack, email, Pushover, and [90+ other services](https://github.com/caronc/apprise/wiki). See [SETUP.md](SETUP.md#3-set-up-notifications-optional) for setup.
+Scheduled digests are sent via [Apprise](https://github.com/caronc/apprise/wiki), which supports Discord webhooks, Telegram, Slack, email, Pushover, **Signal**, and [90+ other services](https://github.com/caronc/apprise/wiki). See [SETUP.md](SETUP.md#3-set-up-notifications-optional) for setup.
+
+Signal notifications use the [signal-cli REST API](https://github.com/bbernhard/signal-cli-rest-api) sidecar container included in `docker-compose.yaml` (opt-in via `--profile signal`). Signal and Discord can be used at the same time — both targets receive every scheduled digest.
 
 ## License
 

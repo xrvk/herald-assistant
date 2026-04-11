@@ -78,6 +78,46 @@ Scheduled digests (weeknight, weekend preview) are sent via [Apprise](https://gi
 3. Copy the webhook URL — it looks like `https://discord.com/api/webhooks/123456/abcdef`
 4. Convert to Apprise format: `discord://123456/abcdef` (replace the `https://discord.com/api/webhooks/` prefix with `discord://`)
 
+### Signal
+
+Signal notifications are delivered via the [signal-cli REST API](https://github.com/bbernhard/signal-cli-rest-api), which runs as an optional sidecar container alongside the bot.
+
+**1. Start the sidecar:**
+
+```bash
+docker compose --profile signal up -d signal-cli-rest-api
+```
+
+**2. Register your phone number** by linking it as a device:
+
+Open the following URL in your browser and scan the QR code with the Signal app on your phone (**Settings → Linked Devices → Add**):
+
+```
+http://localhost:8080/v1/qrcodelink?device_name=herald
+```
+
+**3. Add Signal credentials to `.env`:**
+
+```
+SIGNAL_CLI_REST_API_URL=http://signal-cli-rest-api:8080
+SIGNAL_FROM_NUMBER=+15555551234   # your registered Signal number
+SIGNAL_TO_NUMBER=+16665554321     # recipient phone number
+```
+
+> **Sending to a group:** Retrieve your group ID first:
+> ```bash
+> curl http://localhost:8080/v1/groups/+15555551234 | jq '.[].id'
+> ```
+> Then set `SIGNAL_TO_NUMBER=group.YourGroupId=`
+
+**4. Restart the bot:**
+
+```bash
+docker compose up -d --build
+```
+
+Signal and Discord notifications can be used simultaneously — both `APPRISE_URL` and the Signal variables are additive.
+
 ### Other Services
 
 Apprise supports Telegram, Slack, email, Pushover, and [many more](https://github.com/caronc/apprise/wiki). See the wiki for URL formats.

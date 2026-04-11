@@ -4,6 +4,7 @@ import asyncio
 import time
 import requests
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlparse, quote
 from icalendar import Calendar
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
@@ -145,17 +146,54 @@ try:
 except (ValueError, IndexError) as e:
     raise RuntimeError(f"Invalid WEEKEND_SCHEDULE: {os.getenv('WEEKEND_SCHEDULE')!r} — {e}") from e
 
+# ── Signal notification via signal-cli REST API ──
+# Apprise signal:// plugin — requires a running signal-cli REST API instance.
+# See SETUP.md §3 and docker-compose.yaml for the optional sidecar service.
+_signal_api_url = os.getenv("SIGNAL_CLI_REST_API_URL", "").rstrip("/")
+_signal_from = os.getenv("SIGNAL_FROM_NUMBER", "").strip()
+_signal_to = os.getenv("SIGNAL_TO_NUMBER", "").strip()
+_signal_configured = bool(_signal_api_url and _signal_from and _signal_to)
+
+def _build_signal_apprise_url(api_url, from_num, to_num):
+    """Construct an Apprise signal:// URL from signal-cli REST API config.
+
+    Uses signals:// for HTTPS endpoints, signal:// for HTTP.
+    Phone numbers and group IDs are percent-encoded so special characters
+    ('+', '=', '/') are safe in the URL path.
+    """
+    parsed = urlparse(api_url)
+    scheme = "signals" if parsed.scheme == "https" else "signal"
+    host = parsed.hostname
+    port = parsed.port
+    netloc = f"{host}:{port}" if port else host
+    from_encoded = quote(from_num, safe="")
+    to_encoded = quote(to_num, safe="")
+    return f"{scheme}://{netloc}/{from_encoded}/{to_encoded}"
+
+def _mask_number(num):
+    """Redact middle digits of a phone number or group ID for safe logging."""
+    if len(num) <= 8:
+        return num[:2] + "***"
+    return num[:6] + "***" + num[-4:]
+
 # Setup Apprise (only required when scheduled digests are enabled)
 _schedules_enabled = _weeknight is not None or _weekend is not None
 _apprise_url = os.getenv("APPRISE_URL")
 if _schedules_enabled:
-    if not _apprise_url:
+    if not _apprise_url and not _signal_configured:
         raise RuntimeError(
-            "APPRISE_URL is required when scheduled digests are enabled. "
-            "Set APPRISE_URL or disable both schedules (WEEKNIGHT_SCHEDULE=off WEEKEND_SCHEDULE=off)."
+            "A notification target is required when scheduled digests are enabled. "
+            "Set APPRISE_URL (Discord webhook, Telegram, etc.) and/or configure Signal "
+            "(SIGNAL_CLI_REST_API_URL + SIGNAL_FROM_NUMBER + SIGNAL_TO_NUMBER). "
+            "To disable digests: WEEKNIGHT_SCHEDULE=off WEEKEND_SCHEDULE=off."
         )
     apobj = apprise.Apprise()
-    apobj.add(_apprise_url)
+    if _apprise_url:
+        apobj.add(_apprise_url)
+    if _signal_configured:
+        _signal_apprise_url = _build_signal_apprise_url(_signal_api_url, _signal_from, _signal_to)
+        apobj.add(_signal_apprise_url)
+        print(f"Signal notifications enabled: {_mask_number(_signal_from)} → {_mask_number(_signal_to)} via {_signal_api_url}")
 else:
     apobj = None
 
