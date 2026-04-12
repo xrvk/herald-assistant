@@ -22,7 +22,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 TZ = ZoneInfo(os.getenv("TZ", "America/Los_Angeles"))
 
 # ── LLM Backend selection ──
-_llm_backend = os.getenv("LLM_BACKEND", "gemini").lower()
+_llm_backend = os.getenv("LLM_BACKEND", "ollama").lower()
 if _llm_backend not in ("ollama", "gemini"):
     raise RuntimeError(f"LLM_BACKEND must be 'ollama' or 'gemini', got: {_llm_backend!r}")
 
@@ -78,6 +78,8 @@ if _llm_backend == "gemini":
     print(f"LLM backend: Gemini ({get_gemini_model()})")
 else:
     print(f"LLM backend: Ollama ({OLLAMA_MODEL} at {OLLAMA_URL})")
+    if _gemini_api_key:
+        print(f"  (Gemini fallback available: {get_gemini_model()})")
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN") or None
 DISCORD_CHANNEL_ID = os.getenv("DISCORD_CHANNEL_ID") or None
@@ -896,6 +898,7 @@ def _prepare_ollama_messages(system_prompt, question, history, num_ctx):
 
 def ask_llm(question, calendar_context, include_past=False, history=None):
     """Send a question + calendar context to Ollama and return the response."""
+    global _llm_backend
     num_ctx = _OLLAMA_CTX_WITH_PAST if include_past else _OLLAMA_CTX_BASE
     system_prompt = f"{SYSTEM_PROMPT}\n\nCALENDAR DATA:\n{calendar_context}"
     messages, num_ctx = _prepare_ollama_messages(system_prompt, question, history, num_ctx)
@@ -918,10 +921,15 @@ def ask_llm(question, calendar_context, include_past=False, history=None):
         )
         resp.raise_for_status()
         return resp.json()["message"]["content"]
-    except requests.exceptions.ConnectionError:
-        return _ERR_OLLAMA_OFFLINE
-    except requests.exceptions.Timeout:
-        return _ERR_OLLAMA_TIMEOUT
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+        is_timeout = isinstance(e, requests.exceptions.Timeout)
+        if _gemini_api_key:
+            reason = "timed out" if is_timeout else "offline"
+            print(f"[LLM] Ollama {reason} — falling back to Gemini ({get_gemini_model()})")
+            _llm_backend = "gemini"
+            return ask_gemini(question, calendar_context, history=history)
+        return _ERR_OLLAMA_TIMEOUT if is_timeout else _ERR_OLLAMA_OFFLINE
+        return _ERR_OLLAMA_TIMEOUT if is_timeout else _ERR_OLLAMA_OFFLINE
     except Exception as e:
         print(f"LLM error: {e}")
         return _ERR_LLM_GENERIC
