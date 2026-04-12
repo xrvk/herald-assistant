@@ -21,7 +21,8 @@ services:
     environment:
 
       # ── Calendars (at least one required) ─────────────────────────────
-      # Any ICS URL works — iCloud, Outlook, Google Calendar, etc.
+      # Any ICS URL works — iCloud (webcal://), Outlook (https://), Google (https://), etc.
+      # iCloud webcal:// URLs are automatically converted to https:// by the bot.
       # See NAS-DUAL-SETUP.md §1 for how to get these URLs.
       CALENDAR_1_URL: "https://your-calendar-url.ics"
       CALENDAR_1_LABEL: "Personal"

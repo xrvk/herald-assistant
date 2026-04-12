@@ -59,7 +59,7 @@ The project ships a ready-made NAS configuration file — `docker-compose.nas.ya
 
 **Step 1 — Rename the NAS config file**
 
-In **File Station**, navigate to the project folder, right-click `docker-compose.nas.yaml`, and rename it to `docker-compose.yaml`. (This replaces the development version — that's intentional.)
+In **File Station**, navigate to the project folder, right-click `docker-compose.nas.yaml`, and rename it to `docker-compose.yaml`. (This replaces the development version — that's intentional. If you want to keep the original for reference, copy it first.)
 
 > **Via SSH instead:** `mv docker-compose.nas.yaml docker-compose.yaml`
 
