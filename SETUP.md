@@ -2,7 +2,7 @@
 
 Complete deployment instructions for Scout Report. The recommended approach is Docker — it handles dependencies, auto-restarts on reboot, and keeps your host clean. A local (non-Docker) option is also provided.
 
-> **Fastest path:** Get a Gemini API key ([Step 4 Option A](#option-a-google-gemini-cloud--recommended)), set one calendar URL ([Step 1](#1-get-calendar-urls)), set `DISCORD_BOT_TOKEN` ([Step 2](#2-create-a-discord-bot)), and deploy ([Step 6](#6-deploy)). Scheduled digests are off by default in `.env.example`, so you don't need `APPRISE_URL` to get started.
+> **Fastest path:** `cp .env.example .env`, paste 3 values (`CALENDAR_1_URL`, `DISCORD_BOT_TOKEN`, `GEMINI_API_KEY`), and deploy ([Step 6](#6-deploy)). That's it — scheduled digests and all other settings are off/defaulted.
 
 ---
 
@@ -86,7 +86,7 @@ Each calendar gets its own label, which the LLM uses to distinguish events by so
 
 ## 3. Set Up Notifications (optional)
 
-Scheduled digests (weeknight, weekend preview) are sent to a Discord channel via webhook. If you don't want scheduled digests, skip this step — set `WEEKNIGHT_SCHEDULE=off` and `WEEKEND_SCHEDULE=off` in `.env`.
+Scheduled digests (weeknight, weekend preview) are sent to a Discord channel via webhook. If you don't want scheduled digests, skip this step — they're off by default.
 
 ### Discord Webhook
 
@@ -220,9 +220,9 @@ In `.env`, set `LLM_BACKEND=ollama` (overrides the `gemini` default).
 cp .env.example .env
 ```
 
-Open `.env` in your editor and fill in the values you gathered from steps 1–4. The sections appear in the same order as the steps above — work through them top to bottom.
+Open `.env` and paste the 3 required values at the top: `CALENDAR_1_URL`, `DISCORD_BOT_TOKEN`, and `GEMINI_API_KEY`. Everything else is optional and has sensible defaults.
 
-If you're using Gemini (the default), the only required LLM setting is `GEMINI_API_KEY`. If you're using Ollama, also set `LLM_BACKEND=ollama`.
+If you're using Ollama instead of Gemini, also set `LLM_BACKEND=ollama` and leave `GEMINI_API_KEY` empty.
 
 Everything below the "Optional" divider has sensible defaults. This table covers optional tuning settings. For required and conditional variables, see the corresponding setup steps above or the summary in README.md.
 
@@ -248,15 +248,13 @@ Here's the full reference:
 
 > **Important:** Set `TZ` to your [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (e.g., `Europe/London`, `Asia/Tokyo`). Default is `America/Los_Angeles`. This controls when scheduled digests fire and how times appear in the bot's answers.
 
-> **Minimum to start:** At least one calendar URL, a Gemini API key (or `LLM_BACKEND=ollama`), and a Discord bot token. Scheduled digests are off by default in `.env.example`. If you enable them, you'll also need `APPRISE_URL`.
+> **Minimum to start:** Paste 3 values into `.env` — a calendar URL, a Gemini API key (or set `LLM_BACKEND=ollama`), and a Discord bot token. Everything else is optional.
 >
 > **Minimum viable `.env`:**
 > ```env
 > CALENDAR_1_URL=https://your-calendar-url.ics
-> CALENDAR_1_LABEL=Personal
-> GEMINI_API_KEY=your_api_key_here
 > DISCORD_BOT_TOKEN=your_token_here
-> TZ=America/New_York
+> GEMINI_API_KEY=your_api_key_here
 > ```
 >
 > The bot validates config at startup and will tell you what's missing.

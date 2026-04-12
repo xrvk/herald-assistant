@@ -41,22 +41,28 @@ Healthy startup logs must include:
 
 ## Bot Commands
 
-All commands use `.` prefix. Smart-quote normalization for mobile keyboards.
+All commands use `.` prefix (also registered as `/slash` commands). Smart-quote normalization for mobile keyboards.
 
 | Command | Action |
 |---------|--------|
+| `.help` | Show available commands and example questions |
 | `.llm` | Show current backend + models |
 | `.llm [g\|o\|fl\|gf]` | Switch backend/model |
 | `.cal` | List connected calendars |
-| `.demo` / `.demo off` | Activate/deactivate synthetic demo calendars from `tests/demo_calendars.py` |
+| `.free [duration] [day]` | Find free time slots (deterministic, no LLM). E.g. `.free 1h tomorrow`, `.free 2h this week` |
+| `.demo` / `.demo off` | Activate/deactivate synthetic demo calendars from `demo/calendars.py` |
 
 ## Demo Mode
 
-`.demo` injects synthetic calendars via `__demo_*` fake URLs stored directly in `_cal_cache`. `fetch_events()` has a guard: `url.startswith("__demo_")` returns cached data without HTTP fetch. Real calendars saved on `on_message._real_calendars`; `.demo off` restores them.
+`.demo` injects synthetic calendars via `__demo_*` fake URLs stored directly in `_cal_cache`. `fetch_events()` has a guard: `url.startswith("__demo_")` returns cached data without HTTP fetch. Real calendars saved in `_demo_real_calendars`; `.demo off` restores them.
+
+## Slash Commands
+
+All `.` prefix commands are also registered as Discord slash commands (`/help`, `/llm`, `/cal`, `/free`, `/demo`) via `discord.app_commands.CommandTree`. The tree syncs globally on first `on_ready` (may take ~1hr to appear in Discord). Both prefix and slash commands share the same handler functions (`_handle_help`, `_handle_llm_show`, `_handle_llm_switch`, `_handle_cal`, `_handle_free`, `_handle_demo`).
 
 ## Test Suite
 
-- `tests/test_unit.py` — 33 unit tests, no bot/network needed. Run: `pytest tests/test_unit.py -v`
+- `tests/test_unit.py` — 115 unit tests, no bot/network needed. Run: `pytest tests/test_unit.py -v`
 - `tests/test_integration.py` — live Discord integration tests (needs running bot + `.env`)
 - `tests/demo_calendars.py` — synthetic calendar generators (`generate_work_ics()`, `generate_personal_ics()`, `calendar_stats()`)
 - `run_tests.sh` — runner: `./run_tests.sh` (unit only), `./run_tests.sh --live` (unit + integration)
@@ -72,4 +78,6 @@ All commands use `.` prefix. Smart-quote normalization for mobile keyboards.
 - `HISTORY_DAYS=0` disables past-event classification entirely. Cache TTLs are in seconds (default 3600).
 - At least one calendar URL must be configured or startup crashes.
 - Startup prints a summary banner (LLM backend, calendars, schedules, history config).
-- Timeouts are hard-coded: calendar fetch 30s, Ollama chat 120s, classification 15s.
+- Timeouts are hard-coded: calendar fetch 30s (with 1 retry + 2s backoff on transient errors), Ollama chat 120s, classification 15s.
+- `MAX_OUTPUT_TOKENS` configurable via env var (default 512). `FREE_WORK_HOURS` env var (default `8-17`) controls `.free` command bounds.
+- Graceful shutdown: `atexit` cleans up `_cal_executor`; `run_scheduler_only()` handles SIGTERM/SIGINT.
