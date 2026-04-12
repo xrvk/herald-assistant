@@ -49,7 +49,7 @@ All commands use `.` prefix (also registered as `/slash` commands). Smart-quote 
 | `.llm` | Show current backend + models |
 | `.llm [g\|o\|fl\|gf]` | Switch backend/model |
 | `.cal` | List connected calendars |
-| `.free [duration] [day]` | Find free time slots (deterministic, no LLM). E.g. `.free 1h tomorrow`, `.free 2h this week` |
+| `.ignore` / `.infoevent` | Manage event filters. `add <pattern>` / `remove <pattern>` / `remove all` / (no args = list) |
 | `.demo` / `.demo off` | Activate/deactivate synthetic demo calendars from `demo/calendars.py` |
 
 ## Demo Mode
@@ -58,11 +58,11 @@ All commands use `.` prefix (also registered as `/slash` commands). Smart-quote 
 
 ## Slash Commands
 
-All `.` prefix commands are also registered as Discord slash commands (`/help`, `/llm`, `/cal`, `/free`, `/demo`) via `discord.app_commands.CommandTree`. The tree syncs globally on first `on_ready` (may take ~1hr to appear in Discord). Both prefix and slash commands share the same handler functions (`_handle_help`, `_handle_llm_show`, `_handle_llm_switch`, `_handle_cal`, `_handle_free`, `_handle_demo`).
+All `.` prefix commands are also registered as Discord slash commands (`/help`, `/llm`, `/cal`, `/ignore`, `/infoevent`, `/demo`) via `discord.app_commands.CommandTree`. The tree syncs globally on first `on_ready` (may take ~1hr to appear in Discord). Both prefix and slash commands share the same handler functions (`_handle_help`, `_handle_llm_show`, `_handle_llm_switch`, `_handle_cal`, `_handle_ignore`, `_handle_infoevent`, `_handle_demo`).
 
 ## Test Suite
 
-- `tests/test_unit.py` — 115 unit tests, no bot/network needed. Run: `pytest tests/test_unit.py -v`
+- `tests/test_unit.py` — 145 unit tests, no bot/network needed. Run: `pytest tests/test_unit.py -v`
 - `tests/test_integration.py` — live Discord integration tests (needs running bot + `.env`)
 - `tests/demo_calendars.py` — synthetic calendar generators (`generate_work_ics()`, `generate_personal_ics()`, `calendar_stats()`)
 - `run_tests.sh` — runner: `./run_tests.sh` (unit only), `./run_tests.sh --live` (unit + integration)
@@ -79,5 +79,6 @@ All `.` prefix commands are also registered as Discord slash commands (`/help`, 
 - At least one calendar URL must be configured or startup crashes.
 - Startup prints a summary banner (LLM backend, calendars, schedules, history config).
 - Timeouts are hard-coded: calendar fetch 30s (with 1 retry + 2s backoff on transient errors), Ollama chat 120s, classification 15s.
-- `MAX_OUTPUT_TOKENS` configurable via env var (default 512). `FREE_WORK_HOURS` env var (default `8-17`) controls `.free` command bounds.
+- `MAX_OUTPUT_TOKENS` configurable via env var (default 512).
+- Event filters persisted in `filters.json`. `IGNORED_EVENTS`/`INFO_EVENTS` env vars are optional seeds merged at startup. Info events are visible to AI but tagged as informational.
 - Graceful shutdown: `atexit` cleans up `_cal_executor`; `run_scheduler_only()` handles SIGTERM/SIGINT.

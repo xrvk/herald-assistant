@@ -161,14 +161,10 @@ def _parse_event_list(raw: str) -> list[str]:
 
 IGNORED_EVENTS = _parse_event_list(_ignored_raw)
 
-# Non-blocking events: visible to the LLM but don't count as occupying the user's time
+# Info events: visible to the LLM but tagged as informational (don't block availability)
 # (case-insensitive substring match, comma-separated — same format as IGNORED_EVENTS)
-_nb_raw = os.getenv("NON_BLOCKING_EVENTS", "")
-NON_BLOCKING_EVENTS = _parse_event_list(_nb_raw)
-
-# Runtime additions from .ignore / .nonblock commands (separate from env defaults)
-_runtime_ignored: list[str] = []
-_runtime_nonblocking: list[str] = []
+_ie_raw = os.getenv("INFO_EVENTS", os.getenv("NON_BLOCKING_EVENTS", ""))
+INFO_EVENTS = _parse_event_list(_ie_raw)
 
 # ── Filter persistence ──
 # Runtime-added filter entries are persisted to a JSON file so they survive reboots.
@@ -177,8 +173,8 @@ _runtime_nonblocking: list[str] = []
 FILTERS_PATH = os.getenv("FILTERS_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "filters.json"))
 
 def _save_filters() -> None:
-    """Atomically persist runtime filter entries to FILTERS_PATH."""
-    data = {"ignored": list(_runtime_ignored), "nonblocking": list(_runtime_nonblocking)}
+    """Atomically persist all filter entries to FILTERS_PATH."""
+    data = {"ignored": list(IGNORED_EVENTS), "infoevent": list(INFO_EVENTS)}
     try:
         dir_ = os.path.dirname(FILTERS_PATH) or "."
         with tempfile.NamedTemporaryFile("w", dir=dir_, delete=False, suffix=".tmp") as tmp:
@@ -190,7 +186,7 @@ def _save_filters() -> None:
         print(f"[Filters] Warning: could not save filters to {FILTERS_PATH}: {e}")
 
 def _load_filters() -> None:
-    """Load persisted runtime filter entries from FILTERS_PATH at startup."""
+    """Load persisted filter entries from FILTERS_PATH at startup, merging with env."""
     if not os.path.exists(FILTERS_PATH):
         return
     try:
@@ -203,43 +199,36 @@ def _load_filters() -> None:
         norm = _normalize_event(entry)
         if norm and norm not in IGNORED_EVENTS:
             IGNORED_EVENTS.append(norm)
-            _runtime_ignored.append(norm)
-    for entry in data.get("nonblocking", []):
+    for entry in data.get("infoevent", data.get("nonblocking", [])):
         norm = _normalize_event(entry)
-        if norm and norm not in NON_BLOCKING_EVENTS:
-            NON_BLOCKING_EVENTS.append(norm)
-            _runtime_nonblocking.append(norm)
+        if norm and norm not in INFO_EVENTS:
+            INFO_EVENTS.append(norm)
 
 _load_filters()
 
-def _add_to_filter(target: list[str], runtime_target: list[str], names: list[str]) -> list[str]:
+def _add_to_filter(target: list[str], names: list[str]) -> list[str]:
     """Add normalized event names to a filter list, skipping duplicates. Returns added names."""
     added = []
     for name in names:
         norm = _normalize_event(name)
         if norm and norm not in target:
             target.append(norm)
-            runtime_target.append(norm)
             added.append(norm)
     if added:
         _save_filters()
     return added
 
-def _remove_runtime_filter(target: list[str], runtime_target: list[str]) -> list[str]:
-    """Remove all runtime-added entries from a filter list. Returns the removed names."""
-    removed = list(runtime_target)
-    for norm in removed:
-        if norm in target:
-            target.remove(norm)
-    runtime_target.clear()
+def _remove_all_filter(target: list[str]) -> list[str]:
+    """Remove all entries from a filter list. Returns the removed names."""
+    removed = list(target)
+    target.clear()
     if removed:
         _save_filters()
     return removed
 
-def _remove_from_filter(target: list[str], runtime_target: list[str], names: list[str]) -> tuple[list[str], list[str]]:
+def _remove_from_filter(target: list[str], names: list[str]) -> tuple[list[str], list[str]]:
     """Remove specific normalized event names from a filter list.
 
-    Removes the entry from both the master list and, if present, the runtime list.
     Returns (removed, not_found) lists of normalized names.
     """
     removed, not_found = [], []
@@ -249,8 +238,6 @@ def _remove_from_filter(target: list[str], runtime_target: list[str], names: lis
             continue
         if norm in target:
             target.remove(norm)
-            if norm in runtime_target:
-                runtime_target.remove(norm)
             removed.append(norm)
         else:
             not_found.append(norm)
@@ -286,8 +273,8 @@ _NL_IGNORE_RE = re.compile(
     r"^(?:please\s+)?add\s+[\"']?(.+?)[\"']?\s+to\s+(?:the\s+)?ignore[d]?(?:\s+events?)?\s*(?:list|filter)?\s*$",
     re.IGNORECASE,
 )
-_NL_NONBLOCK_RE = re.compile(
-    r"^(?:please\s+)?(?:add|mark)\s+[\"']?(.+?)[\"']?\s+(?:(?:as|to(?:\s+the)?)\s+)?non.?block(?:ing)?\s*(?:list)?\s*$",
+_NL_INFOEVENT_RE = re.compile(
+    r"^(?:please\s+)?(?:add|mark)\s+[\"']?(.+?)[\"']?\s+(?:(?:as|to(?:\s+the)?)\s+)?info[\s\-]?(?:event|only)(?:s)?\s*(?:list)?\s*$",
     re.IGNORECASE,
 )
 
@@ -384,7 +371,7 @@ SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", (
     "gaps between events. Always reference specific dates and times."
 ))
 
-# All-day events and NON_BLOCKING_EVENTS are tagged (free) in calendar data
+# All-day events and INFO_EVENTS are tagged (free) in calendar data
 SYSTEM_PROMPT += (
     "\n\nEvents marked (free) are informational — still mention them, "
     "but they do not block the user's availability."
@@ -404,13 +391,9 @@ if HISTORY_DAYS > 0:
     print(f"  History: {HISTORY_DAYS} days back")
 else:
     print("  History: disabled")
-if NON_BLOCKING_EVENTS:
-    print(f"  Non-blocking events: {', '.join(NON_BLOCKING_EVENTS)}")
-_loaded_count = len(_runtime_ignored) + len(_runtime_nonblocking)
-if _loaded_count:
-    print(f"  Filters loaded: {_loaded_count} persisted entries from {FILTERS_PATH}")
-else:
-    print(f"  Filters file: {FILTERS_PATH}")
+if INFO_EVENTS:
+    print(f"  Info events: {', '.join(INFO_EVENTS)}")
+print(f"  Filters file: {FILTERS_PATH}")
 if not DISCORD_BOT_TOKEN and not _schedules_enabled:
     print("  ⚠ Warning: No Discord bot token and no scheduled digests — nothing to do.")
     print("  Set DISCORD_BOT_TOKEN for chat, or enable schedules + APPRISE_URL for digests.")
@@ -602,7 +585,7 @@ def _build_day_sections(cal_data, start, num_days, now):
         if day_events:
             lines = []
             for e in day_events:
-                is_nb = NON_BLOCKING_EVENTS and any(nb in e.normalized_summary for nb in NON_BLOCKING_EVENTS)
+                is_nb = INFO_EVENTS and any(nb in e.normalized_summary for nb in INFO_EVENTS)
                 tag = " (free)" if e.all_day or is_nb else ""
                 if e.all_day:
                     lines.append(f"  All Day - {e.summary}{tag}")
@@ -737,183 +720,6 @@ def classify_question(question):
 
     # No clear signal — default to future (most common intent)
     return "future"
-
-# ── Free-time finder ──
-
-# Work hours for .free command (format: "8-17" for 8am-5pm)
-_free_wh_raw = os.getenv("FREE_WORK_HOURS", "8-17")
-try:
-    _fwh_start, _fwh_end = (int(x) for x in _free_wh_raw.split("-", 1))
-    if not (0 <= _fwh_start < _fwh_end <= 24):
-        raise ValueError
-    FREE_WORK_HOURS = (_fwh_start, _fwh_end)
-except (ValueError, TypeError):
-    raise RuntimeError(f"FREE_WORK_HOURS must be 'H-H' (e.g. '8-17'), got: {_free_wh_raw!r}")
-
-# Day name → weekday number (Monday=0)
-_DAY_NAMES = {
-    "monday": 0, "mon": 0, "tuesday": 1, "tue": 1, "tues": 1,
-    "wednesday": 2, "wed": 2, "thursday": 3, "thu": 3, "thurs": 3,
-    "friday": 4, "fri": 4, "saturday": 5, "sat": 5, "sunday": 6, "sun": 6,
-}
-
-_FREE_DURATION_RE = re.compile(r"(\d+)\s*(h|hr|hrs|hour|hours|m|min|mins|minutes?)", re.IGNORECASE)
-_FREE_MAX_SLOTS = 10  # cap displayed slots to fit Discord limit
-
-def _parse_free_args(text):
-    """Parse .free arguments into (min_duration_minutes, list_of_dates).
-
-    Examples:
-        '' → (30, [today])
-        '1h' → (60, [today])
-        '2h tomorrow' → (120, [tomorrow])
-        '30m this week' → (30, [today..end_of_week])
-        'next week' → (30, [next_mon..next_fri])
-        'wednesday' → (30, [next wednesday or today if wed])
-    """
-    text = text.strip().lower()
-    now = datetime.now(TZ)
-    today = now.date()
-
-    # Parse duration (if present)
-    dur_match = _FREE_DURATION_RE.search(text)
-    if dur_match:
-        val = int(dur_match.group(1))
-        unit = dur_match.group(2)[0]  # 'h' or 'm'
-        min_dur = val * 60 if unit == 'h' else val
-        text = (text[:dur_match.start()] + text[dur_match.end():]).strip()
-    else:
-        min_dur = 30
-
-    # Parse day range from remaining text
-    if not text or text == "today":
-        dates = [today]
-    elif text == "tomorrow":
-        dates = [today + timedelta(days=1)]
-    elif text in ("this week", "week"):
-        # Today through end of work week (Friday)
-        days_until_fri = (4 - today.weekday()) % 7
-        if days_until_fri == 0 and today.weekday() == 4:
-            dates = [today]  # it's Friday, just show today
-        elif today.weekday() > 4:
-            # Weekend — show next Mon-Fri
-            days_until_mon = (7 - today.weekday()) % 7
-            mon = today + timedelta(days=days_until_mon)
-            dates = [mon + timedelta(days=i) for i in range(5)]
-        else:
-            dates = [today + timedelta(days=i) for i in range(days_until_fri + 1)]
-    elif text == "next week":
-        days_until_mon = (7 - today.weekday()) % 7
-        if days_until_mon == 0:
-            days_until_mon = 7
-        mon = today + timedelta(days=days_until_mon)
-        dates = [mon + timedelta(days=i) for i in range(5)]
-    else:
-        # Try to match a day name
-        day_num = _DAY_NAMES.get(text)
-        if day_num is not None:
-            delta = (day_num - today.weekday()) % 7
-            if delta == 0:
-                delta = 0  # today is that day
-            target = today + timedelta(days=delta)
-            dates = [target]
-        else:
-            # Fallback: today
-            dates = [today]
-
-    # Cap at 7 days
-    dates = dates[:7]
-    return min_dur, dates
-
-def find_free_slots(target_date, min_duration_min=30, work_hours=None):
-    """Find free time slots on a given date.
-
-    Returns list of (start_datetime, end_datetime, duration_minutes) tuples
-    for gaps ≥ min_duration_min within work hours.
-    """
-    if work_hours is None:
-        work_hours = FREE_WORK_HOURS
-    wh_start, wh_end = work_hours
-    day_start = datetime.combine(target_date, datetime.min.time()).replace(
-        hour=wh_start, tzinfo=TZ
-    )
-    day_end = datetime.combine(target_date, datetime.min.time()).replace(
-        hour=wh_end, tzinfo=TZ
-    )
-
-    # Fetch events for this day across all calendars
-    cal_data = _fetch_all_calendars()
-    busy = []
-    for label, cal in cal_data:
-        events = get_upcoming_events(cal, day_start, day_end)
-        for e in events:
-            if e.all_day:
-                continue  # all-day events don't block time
-            if NON_BLOCKING_EVENTS and any(nb in e.normalized_summary for nb in NON_BLOCKING_EVENTS):
-                continue  # non-blocking events don't block time
-            end_dt = e.dt + timedelta(minutes=e.duration_min) if e.duration_min else e.dt + timedelta(hours=1)
-            # Clamp to work hours
-            ev_start = max(e.dt, day_start)
-            ev_end = min(end_dt, day_end)
-            if ev_start < ev_end:
-                busy.append((ev_start, ev_end))
-
-    # Sort and merge overlapping busy ranges
-    busy.sort()
-    merged = []
-    for start, end in busy:
-        if merged and start <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
-        else:
-            merged.append((start, end))
-
-    # Find gaps
-    slots = []
-    cursor = day_start
-    for busy_start, busy_end in merged:
-        if cursor < busy_start:
-            gap_min = int((busy_start - cursor).total_seconds() / 60)
-            if gap_min >= min_duration_min:
-                slots.append((cursor, busy_start, gap_min))
-        cursor = max(cursor, busy_end)
-    # Final gap after last event
-    if cursor < day_end:
-        gap_min = int((day_end - cursor).total_seconds() / 60)
-        if gap_min >= min_duration_min:
-            slots.append((cursor, day_end, gap_min))
-
-    return slots
-
-def _format_free_slots(dates, min_dur, slots_by_date):
-    """Format free-time results for Discord reply."""
-    if not any(slots_by_date.values()):
-        dur_str = f"{min_dur}m" if min_dur < 60 else f"{min_dur // 60}h"
-        return f"No free slots of {dur_str}+ found for the requested day(s)."
-
-    lines = []
-    total_shown = 0
-    total_remaining = 0
-    for d in dates:
-        slots = slots_by_date.get(d, [])
-        day_label = d.strftime("%A, %b %d")
-        if not slots:
-            lines.append(f"**{day_label}**: No free slots")
-            continue
-        lines.append(f"**{day_label}**:")
-        for start, end, dur in slots:
-            if total_shown >= _FREE_MAX_SLOTS:
-                total_remaining += 1
-                continue
-            dur_str = _format_duration(dur)
-            lines.append(f"  • {start.strftime('%I:%M %p')} – {end.strftime('%I:%M %p')} {dur_str}")
-            total_shown += 1
-
-    if total_remaining:
-        lines.append(f"\n*…and {total_remaining} more slot(s) not shown*")
-
-    dur_label = f"{min_dur}m" if min_dur < 60 else f"{min_dur // 60}h"
-    header = f"🕐 Free slots ({dur_label}+ gaps, {FREE_WORK_HOURS[0]}am–{FREE_WORK_HOURS[1] if FREE_WORK_HOURS[1] <= 12 else FREE_WORK_HOURS[1] - 12}pm):\n"
-    return header + "\n".join(lines)
 
 # ── Conversation history helpers ──
 
@@ -1242,25 +1048,10 @@ _HELP_TEXT = (
     "`.help` — Show this help message\n"
     "`.cal` — List connected calendars\n"
     "`.llm` — Show/switch LLM backend\n"
-    "`.free [duration] [day]` — Find free time slots\n"
     "`.ignore` — Manage events hidden from the AI entirely\n"
-    "`.nonblock` — Manage events visible to AI but that don't block your free time\n"
+    "`.infoevent` — Manage events visible to AI but marked as informational\n"
     "`.demo` / `.demo off` — Toggle demo calendars\n\n"
-    "**`.free` examples**\n"
-    "`.free` — 30min+ gaps today\n"
-    "`.free 1h tomorrow` — 1hr+ gaps tomorrow\n"
-    "`.free 2h this week` — 2hr+ gaps through Friday\n"
-    "`.free 45m next week` — next Mon–Fri\n\n"
-    "**`.ignore` / `.nonblock` sub-commands**\n"
-    "`.ignore` — show current list (entries tagged *env* or *runtime*)\n"
-    "`.ignore <event(s)>` — add one or more events (comma-separated)\n"
-    "`.ignore remove <event(s)>` — remove a specific entry\n"
-    "`.ignore last` — add events extracted from the last bot reply\n"
-    "`.ignore clear` — remove all runtime-added entries (keeps env defaults)\n"
-    "`.nonblock <event(s)>` — mark events as non-blocking\n"
-    "`.nonblock remove <event(s)>` — un-mark a specific event\n"
-    "_Tip: filter lists persist across restarts automatically. "
-    "Optionally pre-seed with `IGNORED_EVENTS` / `NON_BLOCKING_EVENTS` in `.env`._\n\n"
+    "_Run `.ignore` or `.infoevent` with no arguments to see sub-commands._\n\n"
     "**Or just ask a question** — no command needed!\n"
     "• *Am I free Tuesday afternoon?*\n"
     "• *What's on my calendar this weekend?*\n"
@@ -1332,14 +1123,6 @@ async def _handle_llm_switch(reply, choice, user_id, channel_id, is_dm, user_nam
     except (ValueError, RuntimeError) as e:
         await reply(f"Failed: {e}")
 
-async def _handle_free(reply, args_text):
-    min_dur, dates = _parse_free_args(args_text)
-    slots_by_date = {}
-    for d in dates:
-        slots_by_date[d] = await asyncio.to_thread(find_free_slots, d, min_dur)
-    result = _format_free_slots(dates, min_dur, slots_by_date)
-    await reply(result)
-
 async def _handle_demo(reply, action, user_name="unknown"):
     global _demo_real_calendars
 
@@ -1410,22 +1193,21 @@ async def _handle_ignore(reply, args_text, hist_chan=None, user_id=None):
         lines = [f"**Ignore list** ({len(IGNORED_EVENTS)} entries):"]
         if IGNORED_EVENTS:
             for entry in IGNORED_EVENTS:
-                tag = " *(runtime)*" if entry in _runtime_ignored else " *(env)*"
-                lines.append(f"  • `{entry}`{tag}")
+                lines.append(f"  • `{entry}`")
         else:
             lines.append("  *(empty)*")
-        lines.append("\nUse `.ignore <event>` to add, `.ignore remove <event>` to remove, `.ignore clear` to remove all runtime entries.")
+        lines.append("\nUse `.ignore <event>` to add, `.ignore remove <event>` to remove, `.ignore remove all` to clear.")
         await reply("\n".join(lines))
         return
 
-    if args.lower() == "clear":
-        removed = _remove_runtime_filter(IGNORED_EVENTS, _runtime_ignored)
+    if args.lower() == "remove all":
+        removed = _remove_all_filter(IGNORED_EVENTS)
         _future_ctx_cache["ts"] = 0
         _past_ctx_cache["ts"] = 0
         if removed:
-            await reply(f"Removed {len(removed)} runtime ignore entr{'y' if len(removed) == 1 else 'ies'}: {', '.join(f'`{r}`' for r in removed)}")
+            await reply(f"Removed {len(removed)} ignore entr{'y' if len(removed) == 1 else 'ies'}: {', '.join(f'`{r}`' for r in removed)}")
         else:
-            await reply("No runtime ignore entries to remove.")
+            await reply("No ignore entries to remove.")
         return
 
     if args.lower().startswith("remove ") or args.lower() == "remove":
@@ -1434,7 +1216,7 @@ async def _handle_ignore(reply, args_text, hist_chan=None, user_id=None):
             await reply("Usage: `.ignore remove <event>` or `.ignore remove <event1>, <event2>`")
             return
         names = [n.strip() for n in raw.split(",") if n.strip()]
-        removed, not_found = _remove_from_filter(IGNORED_EVENTS, _runtime_ignored, names)
+        removed, not_found = _remove_from_filter(IGNORED_EVENTS, names)
         _future_ctx_cache["ts"] = 0
         _past_ctx_cache["ts"] = 0
         parts = []
@@ -1458,7 +1240,7 @@ async def _handle_ignore(reply, args_text, hist_chan=None, user_id=None):
         if not events:
             await reply("Couldn't extract event names from the last reply. Use `.ignore <event name>` directly.")
             return
-        added = _add_to_filter(IGNORED_EVENTS, _runtime_ignored, events)
+        added = _add_to_filter(IGNORED_EVENTS, events)
         _future_ctx_cache["ts"] = 0
         _past_ctx_cache["ts"] = 0
         if added:
@@ -1468,7 +1250,7 @@ async def _handle_ignore(reply, args_text, hist_chan=None, user_id=None):
         return
 
     names = [n.strip() for n in args.split(",") if n.strip()]
-    added = _add_to_filter(IGNORED_EVENTS, _runtime_ignored, names)
+    added = _add_to_filter(IGNORED_EVENTS, names)
     _future_ctx_cache["ts"] = 0
     _past_ctx_cache["ts"] = 0
     if added:
@@ -1476,39 +1258,38 @@ async def _handle_ignore(reply, args_text, hist_chan=None, user_id=None):
     else:
         await reply("All provided events are already in the ignore list (or names were empty).")
 
-async def _handle_nonblock(reply, args_text, hist_chan=None, user_id=None):
-    """Handle .nonblock command — add/remove/list/clear the non-blocking filter."""
+async def _handle_infoevent(reply, args_text, hist_chan=None, user_id=None):
+    """Handle .infoevent command — add/remove/list/clear the info-event filter."""
     args = args_text.strip()
 
     if not args:
-        lines = [f"**Non-blocking list** ({len(NON_BLOCKING_EVENTS)} entries):"]
-        if NON_BLOCKING_EVENTS:
-            for entry in NON_BLOCKING_EVENTS:
-                tag = " *(runtime)*" if entry in _runtime_nonblocking else " *(env)*"
-                lines.append(f"  • `{entry}`{tag}")
+        lines = [f"**Info-event list** ({len(INFO_EVENTS)} entries):"]
+        if INFO_EVENTS:
+            for entry in INFO_EVENTS:
+                lines.append(f"  • `{entry}`")
         else:
             lines.append("  *(empty)*")
-        lines.append("\nNon-blocking events are shown to the AI but don't block your free time.")
-        lines.append("Use `.nonblock <event>` to add, `.nonblock remove <event>` to remove, `.nonblock clear` to remove all runtime entries.")
+        lines.append("\nInfo events are shown to the AI but marked as informational.")
+        lines.append("Use `.infoevent <event>` to add, `.infoevent remove <event>` to remove, `.infoevent remove all` to clear.")
         await reply("\n".join(lines))
         return
 
-    if args.lower() == "clear":
-        removed = _remove_runtime_filter(NON_BLOCKING_EVENTS, _runtime_nonblocking)
+    if args.lower() == "remove all":
+        removed = _remove_all_filter(INFO_EVENTS)
         _future_ctx_cache["ts"] = 0
         if removed:
-            await reply(f"Removed {len(removed)} runtime non-blocking entr{'y' if len(removed) == 1 else 'ies'}: {', '.join(f'`{r}`' for r in removed)}")
+            await reply(f"Removed {len(removed)} info-event entr{'y' if len(removed) == 1 else 'ies'}: {', '.join(f'`{r}`' for r in removed)}")
         else:
-            await reply("No runtime non-blocking entries to remove.")
+            await reply("No info-event entries to remove.")
         return
 
     if args.lower().startswith("remove ") or args.lower() == "remove":
         raw = args[len("remove "):].strip()
         if not raw:
-            await reply("Usage: `.nonblock remove <event>` or `.nonblock remove <event1>, <event2>`")
+            await reply("Usage: `.infoevent remove <event>` or `.infoevent remove <event1>, <event2>`")
             return
         names = [n.strip() for n in raw.split(",") if n.strip()]
-        removed, not_found = _remove_from_filter(NON_BLOCKING_EVENTS, _runtime_nonblocking, names)
+        removed, not_found = _remove_from_filter(INFO_EVENTS, names)
         _future_ctx_cache["ts"] = 0
         parts = []
         if removed:
@@ -1525,27 +1306,27 @@ async def _handle_nonblock(reply, args_text, hist_chan=None, user_id=None):
             if history:
                 last_reply = history[-1][1]
         if not last_reply:
-            await reply("No previous bot reply found. Use `.nonblock <event name>` to add events directly.")
+            await reply("No previous bot reply found. Use `.infoevent <event name>` to add events directly.")
             return
         events = _extract_events_from_reply(last_reply)
         if not events:
-            await reply("Couldn't extract event names from the last reply. Use `.nonblock <event name>` directly.")
+            await reply("Couldn't extract event names from the last reply. Use `.infoevent <event name>` directly.")
             return
-        added = _add_to_filter(NON_BLOCKING_EVENTS, _runtime_nonblocking, events)
+        added = _add_to_filter(INFO_EVENTS, events)
         _future_ctx_cache["ts"] = 0
         if added:
-            await reply(f"Added {len(added)} event(s) to non-blocking list: {', '.join(f'`{a}`' for a in added)}")
+            await reply(f"Added {len(added)} event(s) to info-event list: {', '.join(f'`{a}`' for a in added)}")
         else:
-            await reply("All found events are already in the non-blocking list.")
+            await reply("All found events are already in the info-event list.")
         return
 
     names = [n.strip() for n in args.split(",") if n.strip()]
-    added = _add_to_filter(NON_BLOCKING_EVENTS, _runtime_nonblocking, names)
+    added = _add_to_filter(INFO_EVENTS, names)
     _future_ctx_cache["ts"] = 0
     if added:
-        await reply(f"Added {len(added)} event(s) to non-blocking list: {', '.join(f'`{a}`' for a in added)}")
+        await reply(f"Added {len(added)} event(s) to info-event list: {', '.join(f'`{a}`' for a in added)}")
     else:
-        await reply("All provided events are already in the non-blocking list (or names were empty).")
+        await reply("All provided events are already in the info-event list (or names were empty).")
 
 # ── Slash commands ──
 
@@ -1579,18 +1360,6 @@ async def slash_llm(interaction: discord.Interaction, choice: str = None):
             str(interaction.user),
         )
 
-@tree.command(name="free", description="Find free time slots (no LLM needed)")
-@app_commands.describe(
-    duration="Minimum gap (e.g. 30m, 1h, 2h). Default: 30m",
-    day="Day or range (today, tomorrow, wednesday, this week, next week). Default: today",
-)
-async def slash_free(interaction: discord.Interaction, duration: str = "", day: str = ""):
-    if DISCORD_ALLOWED_USERS and interaction.user.id not in DISCORD_ALLOWED_USERS:
-        await interaction.response.send_message("You are not authorized.", ephemeral=True)
-        return
-    args_text = f"{duration} {day}".strip()
-    await _handle_free(interaction.response.send_message, args_text)
-
 @tree.command(name="demo", description="Toggle demo calendars (synthetic data)")
 @app_commands.describe(action="on or off (default: toggle)")
 async def slash_demo(interaction: discord.Interaction, action: str = ""):
@@ -1609,17 +1378,17 @@ async def slash_ignore(interaction: discord.Interaction, events: str = ""):
     hist_chan = interaction.user.id if is_dm else interaction.channel_id
     await _handle_ignore(interaction.response.send_message, events, hist_chan, interaction.user.id)
 
-@tree.command(name="nonblock", description="Mark events as non-blocking (shown but don't block free time)")
-@app_commands.describe(events="Event name(s), comma-separated. Use 'last' for last reply, 'clear' to reset, or blank to list.")
-async def slash_nonblock(interaction: discord.Interaction, events: str = ""):
+@tree.command(name="infoevent", description="Mark events as info-only (shown but tagged as informational)")
+@app_commands.describe(events="Event name(s), comma-separated. Use 'last' for last reply, 'remove all' to reset, or blank to list.")
+async def slash_infoevent(interaction: discord.Interaction, events: str = ""):
     if DISCORD_ALLOWED_USERS and interaction.user.id not in DISCORD_ALLOWED_USERS:
         await interaction.response.send_message("You are not authorized.", ephemeral=True)
         return
     is_dm = interaction.guild is None
     hist_chan = interaction.user.id if is_dm else interaction.channel_id
-    await _handle_nonblock(interaction.response.send_message, events, hist_chan, interaction.user.id)
+    await _handle_infoevent(interaction.response.send_message, events, hist_chan, interaction.user.id)
 
-
+@client.event
 async def on_ready():
     global _scheduler_started, _tree_synced, _ready_at
     _ready_at = datetime.now(TZ)
@@ -1680,11 +1449,6 @@ async def on_message(message):
         await _handle_help(message.reply)
         return
 
-    # .free command — deterministic free-time finder (no LLM)
-    if question.lower().startswith(".free"):
-        await _handle_free(message.reply, question[5:].strip())
-        return
-
     # .llm command — show current LLM backend options / switch backend
     if question.lower().startswith(".llm"):
         parts = question.split(maxsplit=1)
@@ -1716,23 +1480,23 @@ async def on_message(message):
         await _handle_ignore(message.reply, question[7:].strip(), hist_chan, message.author.id)
         return
 
-    # .nonblock command — add events to the non-blocking filter
-    if question.lower().startswith(".nonblock"):
+    # .infoevent command — add events to the info-event filter
+    if question.lower().startswith(".infoevent"):
         hist_chan = message.author.id if is_dm else message.channel.id
-        await _handle_nonblock(message.reply, question[9:].strip(), hist_chan, message.author.id)
+        await _handle_infoevent(message.reply, question[10:].strip(), hist_chan, message.author.id)
         return
 
-    # Natural-language shortcuts: "add X to ignore list" / "mark X as non-blocking"
+    # Natural-language shortcuts: "add X to ignore list" / "mark X as info event"
     _nl_ignore_m = _NL_IGNORE_RE.match(question)
     if _nl_ignore_m:
         hist_chan = message.author.id if is_dm else message.channel.id
         await _handle_ignore(message.reply, _nl_ignore_m.group(1).strip(), hist_chan, message.author.id)
         return
 
-    _nl_nonblock_m = _NL_NONBLOCK_RE.match(question)
-    if _nl_nonblock_m:
+    _nl_infoevent_m = _NL_INFOEVENT_RE.match(question)
+    if _nl_infoevent_m:
         hist_chan = message.author.id if is_dm else message.channel.id
-        await _handle_nonblock(message.reply, _nl_nonblock_m.group(1).strip(), hist_chan, message.author.id)
+        await _handle_infoevent(message.reply, _nl_infoevent_m.group(1).strip(), hist_chan, message.author.id)
         return
 
     # Use author ID as channel key for DMs (DM channel IDs can change)

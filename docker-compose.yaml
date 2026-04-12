@@ -5,6 +5,8 @@ services:
     restart: always
     env_file:
       - .env
+    environment:
+      - FILTERS_PATH=/app/data/filters.json
     volumes:
       - scout-data:/app/data
     extra_hosts:

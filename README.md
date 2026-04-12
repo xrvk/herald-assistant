@@ -11,7 +11,7 @@ Runs as a Docker container with your choice of LLM backend.
 | **Weeknight digest** | Tomorrow's work events — configurable days/time (off by default, see SETUP.md to enable) |
 | **Weekend preview** | Fri–Sun events grouped by day — configurable day/time (off by default, see SETUP.md to enable) |
 | **Interactive chat** (Discord DM or channel) | Ask anything about your schedule — powered by Gemini or Ollama |
-| **Bot commands** | `.help`, `.cal`, `.llm`, `.free`, `.ignore`, `.nonblock`, `.demo` — also available as `/slash` commands |
+| **Bot commands** | `.help`, `.cal`, `.llm`, `.ignore`, `.infoevent`, `.demo` — also available as `/slash` commands |
 
 **Example questions you can ask the bot:**
 - "Am I free Tuesday afternoon?"
@@ -94,9 +94,8 @@ All config lives in a single `.env` file — copy [.env.example](.env.example) a
 | `WEEKEND_SCHEDULE` | `off` | Weekend preview schedule: `"days HH:MM"` or `off` |
 | `DISCORD_ALLOWED_USERS` | *(not set)* | Security: bot will only respond to these Discord user IDs (comma-separated). If unset, all users can interact |
 | `IGNORED_EVENTS` | *(not set)* | Optional seed for the ignore list (comma-separated substrings, case-insensitive). Quotes and special chars stripped for fuzzy matching. Can also be managed at runtime with `.ignore` — no initial setup required |
-| `NON_BLOCKING_EVENTS` | *(not set)* | Optional seed for the non-blocking list (same format as `IGNORED_EVENTS`). Can also be managed at runtime with `.nonblock` — no initial setup required |
+| `INFO_EVENTS` | *(not set)* | Optional seed for the info-event list (same format as `IGNORED_EVENTS`). Can also be managed at runtime with `.infoevent` — no initial setup required |
 | `MAX_OUTPUT_TOKENS` | `512` | Max LLM response tokens (increase for longer answers) |
-| `FREE_WORK_HOURS` | `8-17` | Work hours for `.free` command (24h format, e.g. `9-18`) |
 
 See [SETUP.md](SETUP.md#5-configure) and [.env.example](.env.example) for the full list of tuning options (calendar labels, event filtering, history settings, conversation memory, system prompt override, etc.).
 
@@ -109,28 +108,27 @@ Two filter lists let you control how events are presented to the AI:
 | Filter | Bot command | Effect |
 |---|---|---|
 | **Ignored** | `.ignore` | Event is hidden from both digests and the LLM entirely |
-| **Non-blocking** | `.nonblock` | Event is visible to the LLM but doesn't count as occupying your time for `.free` queries |
+| **Info-event** | `.infoevent` | Event is visible to the LLM but tagged as informational (doesn't affect availability) |
 
 Both lists support the same sub-commands:
 
 ```
-.ignore                       # show current list (entries tagged as env or runtime)
+.ignore                       # show current list
 .ignore lunch, canceled       # add one or more events (comma-separated)
 .ignore remove lunch          # remove a specific entry
 .ignore last                  # add events extracted from the last bot reply
-.ignore clear                 # remove all runtime-added entries (keeps env defaults)
+.ignore remove all            # remove all entries
 ```
 
 You can optionally **seed** the lists at startup via env vars — useful for recurring events you always want filtered:
 
 ```env
 IGNORED_EVENTS="pick up kids,lunch,Mom's Appointment"
-NON_BLOCKING_EVENTS="Mom Babysit,Dog Walker,Lunch Break"
+INFO_EVENTS="Mom Babysit,Dog Walker,Lunch Break"
 ```
 
 These are entirely optional — both lists start empty if not set and can be built up through bot commands alone.
-Runtime-added entries are tagged `*(runtime)*` in the list view; env-seeded entries are tagged `*(env)*`.
-**All runtime changes are automatically persisted to `filters.json`** and reloaded on restart — no action needed. In Docker, the provided `docker-compose.yaml` mounts a named volume so the file survives container rebuilds.
+**All changes are automatically persisted to `filters.json`** and reloaded on restart — no action needed. In Docker, the provided `docker-compose.yaml` mounts a named volume so the file survives container rebuilds.
 
 ## Project Structure
 

@@ -10,5 +10,7 @@ RUN useradd --create-home appuser
 COPY main.py .
 COPY demo/ demo/
 
+RUN mkdir -p /app/data && chown appuser:appuser /app/data
+
 USER appuser
 CMD ["python", "-u", "main.py"]
