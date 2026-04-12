@@ -201,6 +201,8 @@ caffeinate -s &
 ```
 
 > The bot gracefully handles the Ollama host being unreachable — it replies with a friendly offline message instead of crashing.
+>
+> **Advanced — Gemini auto-fallback:** If you also set `GEMINI_API_KEY` in `.env` while using `LLM_BACKEND=ollama`, the bot silently switches to Gemini whenever Ollama is offline or times out (instead of returning an error). This is useful for running Ollama on a laptop that's not always on — questions still get answered via Gemini in the meantime. Once the fallback triggers, the bot stays on Gemini for that session; use `.llm o` to switch back to Ollama when it's available again. No extra configuration is needed beyond having both values set.
 
 #### Verify Ollama Is Running
 
