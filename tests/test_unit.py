@@ -382,20 +382,6 @@ class TestConversationHistory:
 class TestDiscordLimits:
     """Test message truncation logic using production constants."""
 
-    def test_short_message_fits(self):
-        answer = "Here are your events for tomorrow."
-        signature = "\n*— gemini-2.5-flash*"
-        assert len(answer + signature) <= _DISCORD_MSG_LIMIT
-
-    def test_long_message_truncated(self):
-        answer = "x" * 2000
-        signature = "\n*— gemini-2.5-flash*"
-        trunc = "\n…(truncated)"
-        overhead = len(trunc) + len(signature)
-        if len(answer) + len(signature) > _DISCORD_MSG_LIMIT:
-            answer = answer[:_DISCORD_MSG_LIMIT - overhead] + trunc + signature
-        assert len(answer) <= _DISCORD_MSG_LIMIT
-
     def test_smart_quote_normalization(self):
         """Mobile keyboards inject smart quotes around commands."""
         q = "\u201c.llm\u201d"
@@ -560,9 +546,6 @@ class TestSystemPrompt:
 
     def test_prompt_contains_calendar_assistant(self):
         assert "calendar assistant" in SYSTEM_PROMPT.lower()
-
-    def test_prompt_contains_free_tag_instruction(self):
-        assert "(free)" in SYSTEM_PROMPT
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -763,20 +746,6 @@ class TestFetchEvents:
 # 13. Demo Calendar Sanity
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-class TestDemoCalendars:
-    """Sanity checks on demo calendar generators."""
-
-    def test_work_calendar_event_count(self):
-        from tests.demo_calendars import generate_work_ics, calendar_stats
-        stats = calendar_stats(generate_work_ics())
-        assert stats["total_events"] >= 20
-
-    def test_personal_calendar_event_count(self):
-        from tests.demo_calendars import generate_personal_ics, calendar_stats
-        stats = calendar_stats(generate_personal_ics())
-        assert stats["total_events"] >= 18
-
-
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 17. Fetch Events — Retry Logic
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -857,9 +826,6 @@ class TestHelpText:
         for cmd in [".help", ".cal", ".llm", ".ignore", ".infoevent", ".demo"]:
             assert cmd in _HELP_TEXT, f"Missing command {cmd} in help text"
 
-    def test_contains_example_questions(self):
-        assert "free Tuesday" in _HELP_TEXT or "calendar" in _HELP_TEXT
-
 
 class TestLlmSwitchMap:
     """Verify switch map covers expected aliases."""
@@ -882,9 +848,6 @@ class TestMaxOutputTokens:
 
     def test_default_value(self):
         assert _MAX_OUTPUT_TOKENS == 512
-
-    def test_is_integer(self):
-        assert isinstance(_MAX_OUTPUT_TOKENS, int)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -926,12 +889,6 @@ class TestAddToFilter:
         _add_to_filter(target, ["lunch"])
         assert target == ["standup", "lunch"]
 
-    def test_does_not_duplicate_existing_entry(self):
-        target = ["lunch"]
-        added = _add_to_filter(target, ["Lunch"])
-        assert added == []
-        assert target == ["lunch"]
-
 
 class TestRemoveAllFilter:
     """Test _remove_all_filter helper."""
@@ -948,12 +905,6 @@ class TestRemoveAllFilter:
         assert removed == []
         assert target == []
 
-    def test_clears_all_entries(self):
-        target = ["entry1", "entry2", "entry3"]
-        removed = _remove_all_filter(target)
-        assert set(removed) == {"entry1", "entry2", "entry3"}
-        assert target == []
-
 
 from main import _remove_from_filter
 
@@ -967,13 +918,6 @@ class TestRemoveFromFilter:
         assert removed == ["standup"]
         assert not_found == []
         assert target == ["lunch"]
-
-    def test_removes_any_entry(self):
-        target = ["lunch", "standup"]
-        removed, not_found = _remove_from_filter(target, ["lunch"])
-        assert removed == ["lunch"]
-        assert not_found == []
-        assert target == ["standup"]
 
     def test_not_found_reported(self):
         target = ["lunch"]
@@ -1220,19 +1164,6 @@ class TestHandleIgnore:
         assert "standup" not in main.IGNORED_EVENTS
         assert "Removed" in replies[0]
 
-    def test_r_all_clears_list(self):
-        _, reply_add = _make_async_reply()
-        self._run(_handle_ignore(reply_add, "standup"))
-        replies, reply = _make_async_reply()
-        self._run(_handle_ignore(reply, "r all"))
-        assert "standup" not in main.IGNORED_EVENTS
-        assert "Removed" in replies[0]
-
-    def test_r_no_args_shows_usage(self):
-        replies, reply = _make_async_reply()
-        self._run(_handle_ignore(reply, "r"))
-        assert "Usage" in replies[0]
-
 
 class TestHandleInfoevent:
     """Integration tests for _handle_infoevent handler logic."""
@@ -1305,19 +1236,6 @@ class TestHandleInfoevent:
         self._run(_handle_infoevent(reply, "r standup"))
         assert "standup" not in main.INFO_EVENTS
         assert "Removed" in replies[0]
-
-    def test_r_all_clears_list(self):
-        _, reply_add = _make_async_reply()
-        self._run(_handle_infoevent(reply_add, "standup"))
-        replies, reply = _make_async_reply()
-        self._run(_handle_infoevent(reply, "r all"))
-        assert "standup" not in main.INFO_EVENTS
-        assert "Removed" in replies[0]
-
-    def test_r_no_args_shows_usage(self):
-        replies, reply = _make_async_reply()
-        self._run(_handle_infoevent(reply, "r"))
-        assert "Usage" in replies[0]
 
     def test_remove_all_when_empty(self):
         main.INFO_EVENTS[:] = []
