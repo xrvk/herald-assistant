@@ -1186,7 +1186,19 @@ async def _handle_demo(reply, action, user_name="unknown"):
 async def _handle_filter_command(reply, args_text, target_list, label, cmd,
                                 invalidate_past=False, list_description=None,
                                 hist_chan=None, user_id=None):
-    """Generic handler for filter commands (.ignore / .infoevent)."""
+    """Generic handler for filter commands (.ignore / .infoevent).
+
+    Args:
+        reply: Async callable to send a response message.
+        args_text: Raw argument string after the command name.
+        target_list: The mutable filter list to operate on (e.g. IGNORED_EVENTS).
+        label: Display name for the filter (e.g. "Ignore", "Info-event").
+        cmd: Command name without dot prefix (e.g. "ignore", "infoevent").
+        invalidate_past: If True, also invalidate the past-context cache on changes.
+        list_description: Optional extra description shown when listing entries.
+        hist_chan: Channel/user key for conversation history lookup (for 'last').
+        user_id: User ID for conversation history lookup (for 'last').
+    """
     args = args_text.strip()
 
     def _invalidate_caches():
