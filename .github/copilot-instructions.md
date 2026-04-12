@@ -12,7 +12,7 @@ Ollama (local) or Gemini (cloud) via `LLM_BACKEND` env var. `get_backend()`/`set
 
 ## Conversation History
 
-Per-user/channel in-memory history (`_conv_history` dict of deques). `_get_history()`/`_store_exchange()` helpers. Bot answers truncated to 500 chars before storage. TTL-based staleness (`CONV_HISTORY_TTL`, default 30 min). Ollama: `num_ctx` bumped by `CONV_HISTORY_CTX_BUMP` (default 4096) only when history overflows base window (avoids KV cache reload penalty); oldest exchanges dropped first if token budget exceeded. Gemini: history passed as `types.Content` list, no token concerns. `!switch` clears history. DMs keyed by `author.id` (not channel ID).
+Per-user/channel in-memory history (`_conv_history` dict of deques). `_get_history()`/`_store_exchange()` helpers. Bot answers truncated to 500 chars before storage. TTL-based staleness (`CONV_HISTORY_TTL`, default 30 min). Ollama: `num_ctx` bumped by `CONV_HISTORY_CTX_BUMP` (default 4096) only when history overflows base window (avoids KV cache reload penalty); oldest exchanges dropped first if token budget exceeded. Gemini: history passed as `types.Content` list, no token concerns. `.llm g/o/fl/gf` clears history on switch. DMs keyed by `author.id` (not channel ID).
 
 ## Bot Process Management
 
@@ -41,12 +41,12 @@ Healthy startup logs must include:
 
 ## Bot Commands
 
-`.` also accepted as prefix (e.g., `.llm`, `.switch`). Smart-quote normalization for mobile keyboards.
+`.` also accepted as prefix (e.g., `.llm`, `.cal`). Smart-quote normalization for mobile keyboards.
 
 | Command | Action |
 |---------|--------|
 | `!llm` | Show current backend + models |
-| `!switch [g\|o]` | Switch backend. No arg = toggle |
+| `.llm [g\|o\|fl\|gf]` | Switch backend/model. No arg = show info |
 | `!cal` | List connected calendars |
 | `!demo` / `!demo off` | Activate/deactivate synthetic demo calendars from `tests/demo_calendars.py` |
 

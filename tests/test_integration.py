@@ -146,14 +146,14 @@ class BotTester:
         self.results.append(TestResult("!llm", ok, f"Response: {resp[:120]}"))
 
     async def test_switch_to_gemini(self):
-        """!switch g — switch to Gemini."""
-        print("  Testing !switch g ...")
-        resp = await self.send_and_wait("!switch g")
+        """.llm g — switch to Gemini."""
+        print("  Testing .llm g ...")
+        resp = await self.send_and_wait(".llm g")
         if resp is None:
-            self.results.append(TestResult("!switch g", False, "No response (timeout)"))
+            self.results.append(TestResult(".llm g", False, "No response (timeout)"))
             return
         ok = "gemini" in resp.lower()
-        self.results.append(TestResult("!switch g", ok, f"Response: {resp[:120]}"))
+        self.results.append(TestResult(".llm g", ok, f"Response: {resp[:120]}"))
 
     async def test_ask_gemini_weekday(self):
         """Ask Gemini about a random weekday."""
@@ -173,14 +173,14 @@ class BotTester:
         self.results.append(TestResult(f"Gemini ({day})", ok, detail))
 
     async def test_switch_to_ollama(self):
-        """!switch o — switch to Ollama."""
-        print("  Testing !switch o ...")
-        resp = await self.send_and_wait("!switch o")
+        """.llm o — switch to Ollama."""
+        print("  Testing .llm o ...")
+        resp = await self.send_and_wait(".llm o")
         if resp is None:
-            self.results.append(TestResult("!switch o", False, "No response (timeout)"))
+            self.results.append(TestResult(".llm o", False, "No response (timeout)"))
             return
         ok = "ollama" in resp.lower()
-        self.results.append(TestResult("!switch o", ok, f"Response: {resp[:120]}"))
+        self.results.append(TestResult(".llm o", ok, f"Response: {resp[:120]}"))
 
     async def test_ask_ollama_weekday(self):
         """Ask Ollama about a random weekday."""
@@ -199,9 +199,9 @@ class BotTester:
         self.results.append(TestResult(f"Ollama ({day})", ok, detail))
 
     async def test_switch_back_original(self):
-        """!switch g — restore Gemini (default) after tests."""
+        """.llm g — restore Gemini (default) after tests."""
         print("  Restoring backend to Gemini ...")
-        resp = await self.send_and_wait("!switch g")
+        resp = await self.send_and_wait(".llm g")
         if resp is None:
             self.results.append(TestResult("Restore backend", False, "No response"))
             return

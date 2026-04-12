@@ -870,15 +870,51 @@ async def on_message(message):
         # Remove only the matching closing quote (if present) to preserve intent
         question = '!' + (rest[:-1] if rest.endswith(q) else rest)
 
-    # Accept . as command prefix (e.g., .switch, .llm, .cal)
+    # Accept . as command prefix (e.g., .llm, .cal)
     if len(question) >= 2 and question[0] == '.' and question[1:].lstrip()[0:1].isalpha():
         question = '!' + question[1:]
 
-    # !llm command — show current LLM backend options
+    # !llm command — show or switch LLM backend
     if question.lower().startswith("!llm"):
         parts = question.split(maxsplit=1)
         if len(parts) > 1:
-            await message.reply("Use `.switch g` for Gemini or `.switch o` for Ollama")
+            # Argument provided — treat as a switch request
+            choice = parts[1].strip().lower()
+            switch_map = {
+                "g":          ("gemini", None),
+                "gemini":     ("gemini", None),
+                "o":          ("ollama", None),
+                "ollama":     ("ollama", None),
+                # Legacy numeric shortcuts
+                "1":          ("ollama", None),
+                "2":          ("gemini", None),
+                # Gemini per-model shortcuts
+                "fl":         ("gemini", "gemini-2.5-flash-lite"),
+                "flash-lite": ("gemini", "gemini-2.5-flash-lite"),
+                "gf":         ("gemini", "gemini-2.5-flash"),
+                "flash":      ("gemini", "gemini-2.5-flash"),
+            }
+            entry = switch_map.get(choice)
+            if not entry:
+                await message.reply(
+                    "Invalid choice. Use `.llm fl` (flash-lite), "
+                    "`.llm gf` (flash), or `.llm o` (ollama)"
+                )
+                return
+            target_backend, target_model = entry
+            try:
+                set_backend(target_backend)
+                if target_model:
+                    set_gemini_model(target_model)
+                hist_key = (message.author.id if is_dm else message.channel.id, message.author.id)
+                _conv_history.pop(hist_key, None)
+                label = get_backend()
+                if get_backend() == "gemini":
+                    label = f"{label} ({get_gemini_model()})"
+                await message.reply(f"Switched to **{label}**")
+                print(f"[Backend] Switched to {get_backend()} ({get_gemini_model() if get_backend() == 'gemini' else OLLAMA_MODEL}) by {message.author}")
+            except (ValueError, RuntimeError) as e:
+                await message.reply(f"Failed: {e}")
             return
         current = get_backend()
         cur_gmodel = get_gemini_model()
@@ -896,77 +932,8 @@ async def on_message(message):
             f"1. **Ollama** — model: `{OLLAMA_MODEL}`{ollama_marker}\n"
             f"2. **Gemini** models:\n"
             + "\n".join(gemini_rows) + "\n\n"
-            "Switch with: `.switch o`, `.switch fl`, `.switch gf`"
+            "Switch with: `.llm o`, `.llm fl`, `.llm gf`"
         )
-        return
-
-    # !switch command — switch LLM backend
-    if question.lower().startswith("!switch"):
-        parts = question.split(maxsplit=1)
-        if len(parts) == 1:
-            # No argument: cycle to next model in the ring
-            # ollama → flash-lite → flash → ollama
-            _cycle = [
-                ("ollama", None),
-                ("gemini", "gemini-2.5-flash-lite"),
-                ("gemini", "gemini-2.5-flash"),
-            ]
-            current = (get_backend(), get_gemini_model() if get_backend() == "gemini" else None)
-            idx = next((i for i, c in enumerate(_cycle) if c == current), 0)
-            target_backend, target_model = _cycle[(idx + 1) % len(_cycle)]
-            try:
-                set_backend(target_backend)
-                if target_model:
-                    set_gemini_model(target_model)
-                hist_key = (message.author.id if is_dm else message.channel.id, message.author.id)
-                _conv_history.pop(hist_key, None)
-                label = get_backend()
-                if get_backend() == "gemini":
-                    label = f"{label} ({get_gemini_model()})"
-                await message.reply(f"Switched to **{label}**")
-                print(f"[Backend] Switched to {get_backend()} ({get_gemini_model() if get_backend() == 'gemini' else OLLAMA_MODEL}) by {message.author}")
-            except (ValueError, RuntimeError) as e:
-                await message.reply(f"Failed: {e}")
-            return
-        else:
-            choice = parts[1].strip().lower()
-        switch_map = {
-            "g":          ("gemini", None),
-            "gemini":     ("gemini", None),
-            "o":          ("ollama", None),
-            "ollama":     ("ollama", None),
-            # Legacy numeric shortcuts
-            "1":          ("ollama", None),
-            "2":          ("gemini", None),
-            # Gemini per-model shortcuts
-            "fl":         ("gemini", "gemini-2.5-flash-lite"),
-            "flash-lite": ("gemini", "gemini-2.5-flash-lite"),
-            "gf":         ("gemini", "gemini-2.5-flash"),
-            "flash":      ("gemini", "gemini-2.5-flash"),
-        }
-        entry = switch_map.get(choice)
-        if not entry:
-            await message.reply(
-                "Invalid choice. Use `.switch fl` (flash-lite), "
-                "`.switch gf` (flash), or `.switch o` (ollama)"
-            )
-            return
-
-        target_backend, target_model = entry
-        try:
-            set_backend(target_backend)
-            if target_model:
-                set_gemini_model(target_model)
-            # Clear conversation history on backend/model switch
-            hist_key = (message.author.id if is_dm else message.channel.id, message.author.id)
-            _conv_history.pop(hist_key, None)
-            label = get_backend()
-            if get_backend() == "gemini":
-                label = f"{label} ({get_gemini_model()})"
-            await message.reply(f"Switched to **{label}**")
-            print(f"[Backend] Switched to {get_backend()} ({get_gemini_model() if get_backend() == 'gemini' else OLLAMA_MODEL}) by {message.author}")
-        except (ValueError, RuntimeError) as e:
-            await message.reply(f"Failed: {e}")
         return
 
     # !cal command — list connected calendars
