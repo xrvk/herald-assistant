@@ -8,7 +8,7 @@ Python 3.11 (Docker) / 3.13 (local). Deps: discord.py, APScheduler, Apprise, ica
 
 ## LLM Backends
 
-Ollama (local) or Gemini (cloud) via `LLM_BACKEND` env var. `get_backend()`/`set_backend()` for runtime state. `_get_gemini_client()` is lazy-init. Gemini free tier: ~5 RPM with retry/backoff.
+Ollama (local) or Gemini (cloud) via `LLM_BACKEND` env var. `get_backend()`/`set_backend()` for runtime state. `_get_gemini_client()` is lazy-init. Gemini models: `gemini-2.5-flash-lite` (15 RPM free tier), `gemini-2.5-flash` (10 RPM free tier). Default Ollama model: `gemma4:e4b` (`OLLAMA_MODEL` env var). Ollama → Gemini auto-fallback: if `GEMINI_API_KEY` is set and Ollama is unreachable or times out, `_llm_backend` is silently switched to Gemini for that request and remains switched.
 
 ## Conversation History
 
@@ -62,7 +62,7 @@ All `.` prefix commands are also registered as Discord slash commands (`/help`, 
 
 ## Test Suite
 
-- `tests/test_unit.py` — 145 unit tests, no bot/network needed. Run: `pytest tests/test_unit.py -v`
+- `tests/test_unit.py` — 137 unit tests, no bot/network needed. Run: `pytest tests/test_unit.py -v`
 - `tests/test_integration.py` — live Discord integration tests (needs running bot + `.env`)
 - `tests/demo_calendars.py` — synthetic calendar generators (`generate_work_ics()`, `generate_personal_ics()`, `calendar_stats()`)
 - `run_tests.sh` — runner: `./run_tests.sh` (unit only), `./run_tests.sh --live` (unit + integration)
