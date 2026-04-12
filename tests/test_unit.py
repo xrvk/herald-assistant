@@ -1060,3 +1060,305 @@ class TestFreeWorkHours:
     def test_is_tuple(self):
         assert isinstance(FREE_WORK_HOURS, tuple)
         assert len(FREE_WORK_HOURS) == 2
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 21. Runtime filter helpers (_add_to_filter, _remove_runtime_filter)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+from main import (
+    _add_to_filter,
+    _remove_runtime_filter,
+    _extract_events_from_reply,
+    _NL_IGNORE_RE,
+    _NL_NONBLOCK_RE,
+)
+
+
+class TestAddToFilter:
+    """Test _add_to_filter helper."""
+
+    def test_adds_normalized_names(self):
+        target = []
+        runtime = []
+        added = _add_to_filter(target, runtime, ["Team Standup", "Weekly 1:1"])
+        assert added == ["team standup", "weekly 11"]
+        assert target == ["team standup", "weekly 11"]
+        assert runtime == ["team standup", "weekly 11"]
+
+    def test_skips_duplicates(self):
+        target = ["lunch"]
+        runtime = []
+        added = _add_to_filter(target, runtime, ["lunch", "Lunch"])
+        assert added == []
+        assert target == ["lunch"]
+
+    def test_skips_empty_names(self):
+        target = []
+        runtime = []
+        added = _add_to_filter(target, runtime, ["", "   ", "standup"])
+        assert added == ["standup"]
+
+    def test_multiple_adds_accumulate(self):
+        target = []
+        runtime = []
+        _add_to_filter(target, runtime, ["standup"])
+        _add_to_filter(target, runtime, ["lunch"])
+        assert target == ["standup", "lunch"]
+        assert runtime == ["standup", "lunch"]
+
+    def test_does_not_duplicate_existing_env_entry(self):
+        target = ["lunch"]  # existing from env
+        runtime = []
+        added = _add_to_filter(target, runtime, ["Lunch"])
+        assert added == []
+        assert target == ["lunch"]
+
+
+class TestRemoveRuntimeFilter:
+    """Test _remove_runtime_filter helper."""
+
+    def test_removes_runtime_entries(self):
+        target = ["lunch", "standup", "canceled"]
+        runtime = ["standup"]
+        removed = _remove_runtime_filter(target, runtime)
+        assert removed == ["standup"]
+        assert target == ["lunch", "canceled"]
+        assert runtime == []
+
+    def test_empty_runtime_returns_empty(self):
+        target = ["lunch"]
+        runtime = []
+        removed = _remove_runtime_filter(target, runtime)
+        assert removed == []
+        assert target == ["lunch"]
+
+    def test_clears_all_runtime_entries(self):
+        target = ["env-entry", "rt1", "rt2"]
+        runtime = ["rt1", "rt2"]
+        removed = _remove_runtime_filter(target, runtime)
+        assert set(removed) == {"rt1", "rt2"}
+        assert target == ["env-entry"]
+        assert runtime == []
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 22. _extract_events_from_reply
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestExtractEventsFromReply:
+    """Test extraction of event names from bullet-point bot replies."""
+
+    def test_notification_format(self):
+        text = "• 9:00 AM: Team Standup (30m)\n• 11:00 AM: Weekly 1:1 (60m)"
+        events = _extract_events_from_reply(text)
+        assert "Team Standup" in events
+        assert "Weekly 1:1" in events
+
+    def test_all_day_format(self):
+        text = "• All Day: Company Holiday"
+        events = _extract_events_from_reply(text)
+        assert "Company Holiday" in events
+
+    def test_no_bullets_returns_empty(self):
+        text = "You have no events tomorrow! Have a nice day."
+        events = _extract_events_from_reply(text)
+        assert events == []
+
+    def test_deduplicates_same_event(self):
+        text = "• 9:00 AM: Standup (30m)\n• 10:00 AM: Standup (30m)"
+        events = _extract_events_from_reply(text)
+        assert events.count("Standup") == 1
+
+    def test_strips_bold_markdown(self):
+        text = "• **Team Standup** (30m)"
+        events = _extract_events_from_reply(text)
+        assert any("Team Standup" in e or "team standup" in e.lower() for e in events)
+
+    def test_dash_bullet(self):
+        text = "- 2:00 PM: Sprint Review (60m)"
+        events = _extract_events_from_reply(text)
+        assert "Sprint Review" in events
+
+    def test_ignores_short_content(self):
+        text = "• OK\n• A"
+        events = _extract_events_from_reply(text)
+        assert events == []
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 23. Natural-language pattern regexes
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestNLPatterns:
+    """Test _NL_IGNORE_RE and _NL_NONBLOCK_RE patterns."""
+
+    def test_ignore_add_basic(self):
+        m = _NL_IGNORE_RE.match("add team standup to ignore list")
+        assert m is not None
+        assert "team standup" in m.group(1).lower()
+
+    def test_ignore_add_with_the(self):
+        m = _NL_IGNORE_RE.match("add lunch to the ignore list")
+        assert m is not None
+
+    def test_ignore_add_filter(self):
+        m = _NL_IGNORE_RE.match("add canceled meetings to ignore filter")
+        assert m is not None
+
+    def test_ignore_add_please(self):
+        m = _NL_IGNORE_RE.match("please add weekly sync to ignore list")
+        assert m is not None
+
+    def test_ignore_no_match_vague(self):
+        assert _NL_IGNORE_RE.match("ignore everything next week") is None
+        assert _NL_IGNORE_RE.match("what's on my calendar") is None
+
+    def test_nonblock_mark_as(self):
+        m = _NL_NONBLOCK_RE.match("mark standup as non-blocking")
+        assert m is not None
+        assert "standup" in m.group(1).lower()
+
+    def test_nonblock_add_to(self):
+        m = _NL_NONBLOCK_RE.match("add lunch to non-blocking")
+        assert m is not None
+
+    def test_nonblock_mark_nonblocking(self):
+        m = _NL_NONBLOCK_RE.match("mark dog walker as nonblocking")
+        assert m is not None
+
+    def test_nonblock_no_match_vague(self):
+        assert _NL_NONBLOCK_RE.match("is this meeting non-blocking?") is None
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 24. _handle_ignore / _handle_nonblock (async, via asyncio.run)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+import asyncio
+from main import _handle_ignore, _handle_nonblock
+
+
+def _make_async_reply():
+    """Return (replies_list, async_reply_fn) for testing async handlers."""
+    replies = []
+    async def reply(msg):
+        replies.append(msg)
+    return replies, reply
+
+
+class TestHandleIgnore:
+    """Integration tests for _handle_ignore handler logic."""
+
+    def setup_method(self):
+        """Save and restore IGNORED_EVENTS / _runtime_ignored between tests."""
+        self._orig_ignored = list(main.IGNORED_EVENTS)
+        self._orig_runtime = list(main._runtime_ignored)
+
+    def teardown_method(self):
+        main.IGNORED_EVENTS[:] = self._orig_ignored
+        main._runtime_ignored[:] = self._orig_runtime
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def test_show_list(self):
+        replies, reply = _make_async_reply()
+        self._run(_handle_ignore(reply, ""))
+        assert len(replies) == 1
+        assert "Ignore list" in replies[0]
+
+    def test_add_single(self):
+        replies, reply = _make_async_reply()
+        initial = len(main.IGNORED_EVENTS)
+        self._run(_handle_ignore(reply, "weekly sync"))
+        assert len(main.IGNORED_EVENTS) == initial + 1
+        assert "weekly sync" in main.IGNORED_EVENTS
+        assert "Added" in replies[0]
+
+    def test_add_multiple_comma_separated(self):
+        replies, reply = _make_async_reply()
+        initial = len(main.IGNORED_EVENTS)
+        self._run(_handle_ignore(reply, "standup, daily checkin"))
+        assert len(main.IGNORED_EVENTS) == initial + 2
+        assert "Added 2" in replies[0]
+
+    def test_add_duplicate_skipped(self):
+        replies, reply = _make_async_reply()
+        self._run(_handle_ignore(reply, "lunch"))  # already in IGNORED_EVENTS from env
+        assert "already" in replies[0]
+
+    def test_clear_removes_runtime(self):
+        _, reply_discard = _make_async_reply()
+        self._run(_handle_ignore(reply_discard, "team meeting"))
+        assert "team meeting" in main.IGNORED_EVENTS
+        replies, reply = _make_async_reply()
+        self._run(_handle_ignore(reply, "clear"))
+        assert "team meeting" not in main.IGNORED_EVENTS
+        assert "Removed" in replies[0]
+
+    def test_clear_when_empty(self):
+        replies, reply = _make_async_reply()
+        self._run(_handle_ignore(reply, "clear"))
+        assert "No runtime" in replies[0]
+
+    def test_last_no_history(self):
+        replies, reply = _make_async_reply()
+        self._run(_handle_ignore(reply, "last", hist_chan=None, user_id=None))
+        assert "No previous" in replies[0]
+
+
+class TestHandleNonblock:
+    """Integration tests for _handle_nonblock handler logic."""
+
+    def setup_method(self):
+        self._orig_nb = list(main.NON_BLOCKING_EVENTS)
+        self._orig_runtime_nb = list(main._runtime_nonblocking)
+
+    def teardown_method(self):
+        main.NON_BLOCKING_EVENTS[:] = self._orig_nb
+        main._runtime_nonblocking[:] = self._orig_runtime_nb
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def test_show_list(self):
+        replies, reply = _make_async_reply()
+        self._run(_handle_nonblock(reply, ""))
+        assert "Non-blocking list" in replies[0]
+
+    def test_add_single(self):
+        replies, reply = _make_async_reply()
+        initial = len(main.NON_BLOCKING_EVENTS)
+        self._run(_handle_nonblock(reply, "standup"))
+        assert len(main.NON_BLOCKING_EVENTS) == initial + 1
+        assert "standup" in main.NON_BLOCKING_EVENTS
+        assert "Added" in replies[0]
+
+    def test_add_multiple(self):
+        replies, reply = _make_async_reply()
+        initial = len(main.NON_BLOCKING_EVENTS)
+        self._run(_handle_nonblock(reply, "standup, dog walker"))
+        assert len(main.NON_BLOCKING_EVENTS) == initial + 2
+
+    def test_clear(self):
+        _, reply_discard = _make_async_reply()
+        self._run(_handle_nonblock(reply_discard, "standup"))
+        replies, reply = _make_async_reply()
+        self._run(_handle_nonblock(reply, "clear"))
+        assert "standup" not in main.NON_BLOCKING_EVENTS
+        assert "Removed" in replies[0]
+
+    def test_last_with_history(self):
+        """._handle_nonblock last extracts from conv history reply."""
+        # Seed fake conversation history
+        hist_chan, user_id = 999, 777
+        main._store_exchange(hist_chan, user_id, "what's tomorrow?",
+                             "• 9:00 AM: Team Standup (30m)\n• 11:00 AM: Design Review (60m)")
+        replies, reply = _make_async_reply()
+        initial = len(main.NON_BLOCKING_EVENTS)
+        self._run(_handle_nonblock(reply, "last", hist_chan=hist_chan, user_id=user_id))
+        assert len(main.NON_BLOCKING_EVENTS) > initial
+        assert "Added" in replies[0]
+        # Cleanup history
+        main._conv_history.pop((hist_chan, user_id), None)

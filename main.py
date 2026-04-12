@@ -162,6 +162,62 @@ IGNORED_EVENTS = _parse_event_list(_ignored_raw)
 _nb_raw = os.getenv("NON_BLOCKING_EVENTS", "")
 NON_BLOCKING_EVENTS = _parse_event_list(_nb_raw)
 
+# Runtime additions from .ignore / .nonblock commands (separate from env defaults)
+_runtime_ignored: list[str] = []
+_runtime_nonblocking: list[str] = []
+
+def _add_to_filter(target: list, runtime_target: list, names: list[str]) -> list[str]:
+    """Add normalized event names to a filter list, skipping duplicates. Returns added names."""
+    added = []
+    for name in names:
+        norm = _normalize_event(name)
+        if norm and norm not in target:
+            target.append(norm)
+            runtime_target.append(norm)
+            added.append(norm)
+    return added
+
+def _remove_runtime_filter(target: list, runtime_target: list) -> list[str]:
+    """Remove all runtime-added entries from a filter list. Returns the removed names."""
+    removed = list(runtime_target)
+    for norm in removed:
+        if norm in target:
+            target.remove(norm)
+    runtime_target.clear()
+    return removed
+
+def _extract_events_from_reply(text: str) -> list[str]:
+    """Extract potential calendar event names from bullet-pointed lines in a bot reply."""
+    events = []
+    seen: set[str] = set()
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line[0] not in ('•', '-', '*'):
+            continue
+        # Strip bullet and bold markdown
+        content = re.sub(r'\*+', '', line.lstrip('•-* ')).strip()
+        # Remove leading time prefix (e.g. "10:00 AM: " or "All Day: ")
+        m = re.match(
+            r'(?:All\s+Day:\s*)?(?:\d{1,2}:\d{2}\s*(?:AM|PM)\s*[:\-\u2014]+\s*)?(.+?)(?:\s+\(\d+[hm](?:\s+\d+[hm])?\))?\s*$',
+            content, re.IGNORECASE,
+        )
+        if m:
+            name = m.group(1).strip().rstrip(':').strip()
+            if name and len(name) > 2 and name.lower() not in seen:
+                seen.add(name.lower())
+                events.append(name)
+    return events
+
+# Natural-language patterns for "add X to ignore/non-blocking list"
+_NL_IGNORE_RE = re.compile(
+    r"^(?:please\s+)?add\s+[\"']?(.+?)[\"']?\s+to\s+(?:the\s+)?(?:ignore[d]?|ignored\s+events?)\s*(?:list|filter)?\s*$",
+    re.IGNORECASE,
+)
+_NL_NONBLOCK_RE = re.compile(
+    r"^(?:please\s+)?(?:add|mark)\s+[\"']?(.+?)[\"']?\s+(?:as\s+)?(?:to\s+(?:the\s+)?)?non.?block(?:ing)?\s*(?:list)?\s*$",
+    re.IGNORECASE,
+)
+
 # ── Schedule configuration ──
 # Format: "days HH:MM" or "off" to disable
 # days = comma-separated APScheduler day names (mon,tue,wed,thu,fri,sat,sun)
@@ -1104,12 +1160,20 @@ _HELP_TEXT = (
     "`.cal` — List connected calendars\n"
     "`.llm` — Show/switch LLM backend\n"
     "`.free [duration] [day]` — Find free time slots\n"
+    "`.ignore [event(s)]` — Hide events from AI (ignored entirely)\n"
+    "`.nonblock [event(s)]` — Mark events as non-blocking (shown but don't block free time)\n"
     "`.demo` / `.demo off` — Toggle demo calendars\n\n"
     "**`.free` examples**\n"
     "`.free` — 30min+ gaps today\n"
     "`.free 1h tomorrow` — 1hr+ gaps tomorrow\n"
     "`.free 2h this week` — 2hr+ gaps through Friday\n"
     "`.free 45m next week` — next Mon–Fri\n\n"
+    "**`.ignore` / `.nonblock` examples**\n"
+    "`.ignore` — show current ignore list\n"
+    "`.ignore lunch, canceled` — ignore multiple events by name\n"
+    "`.ignore last` — ignore events from the last bot reply\n"
+    "`.ignore clear` — remove runtime-added entries\n"
+    "`.nonblock standup` — mark standup as non-blocking\n\n"
     "**Or just ask a question** — no command needed!\n"
     "• *Am I free Tuesday afternoon?*\n"
     "• *What's on my calendar this weekend?*\n"
@@ -1251,6 +1315,118 @@ async def _handle_demo(reply, action, user_name="unknown"):
     )
     print(f"[Demo] Enabled — Work: {w_stats['total_events']}, Personal: {p_stats['total_events']}, Family: {f_stats['total_events']} ({total} total)")
 
+async def _handle_ignore(reply, args_text, hist_chan=None, user_id=None):
+    """Handle .ignore command — add/list/clear the ignore filter."""
+    args = args_text.strip()
+
+    if not args:
+        lines = [f"**Ignore list** ({len(IGNORED_EVENTS)} entries):"]
+        if IGNORED_EVENTS:
+            for entry in IGNORED_EVENTS:
+                tag = " *(runtime)*" if entry in _runtime_ignored else " *(env)*"
+                lines.append(f"  • `{entry}`{tag}")
+        else:
+            lines.append("  *(empty)*")
+        lines.append("\nUse `.ignore <event>` to add, `.ignore clear` to remove runtime entries.")
+        await reply("\n".join(lines))
+        return
+
+    if args.lower() == "clear":
+        removed = _remove_runtime_filter(IGNORED_EVENTS, _runtime_ignored)
+        _future_ctx_cache["ts"] = 0
+        _past_ctx_cache["ts"] = 0
+        if removed:
+            await reply(f"Removed {len(removed)} runtime ignore entr{'y' if len(removed) == 1 else 'ies'}: {', '.join(f'`{r}`' for r in removed)}")
+        else:
+            await reply("No runtime ignore entries to remove.")
+        return
+
+    if args.lower() == "last":
+        last_reply = ""
+        if hist_chan is not None and user_id is not None:
+            history = _get_history(hist_chan, user_id)
+            if history:
+                last_reply = history[-1][1]
+        if not last_reply:
+            await reply("No previous bot reply found. Use `.ignore <event name>` to add events directly.")
+            return
+        events = _extract_events_from_reply(last_reply)
+        if not events:
+            await reply("Couldn't extract event names from the last reply. Use `.ignore <event name>` directly.")
+            return
+        added = _add_to_filter(IGNORED_EVENTS, _runtime_ignored, events)
+        _future_ctx_cache["ts"] = 0
+        _past_ctx_cache["ts"] = 0
+        if added:
+            await reply(f"Added {len(added)} event(s) to ignore list: {', '.join(f'`{a}`' for a in added)}")
+        else:
+            await reply("All found events are already in the ignore list.")
+        return
+
+    names = [n.strip() for n in args.split(",") if n.strip()]
+    added = _add_to_filter(IGNORED_EVENTS, _runtime_ignored, names)
+    _future_ctx_cache["ts"] = 0
+    _past_ctx_cache["ts"] = 0
+    if added:
+        await reply(f"Added {len(added)} event(s) to ignore list: {', '.join(f'`{a}`' for a in added)}")
+    else:
+        await reply("All provided events are already in the ignore list (or names were empty).")
+
+async def _handle_nonblock(reply, args_text, hist_chan=None, user_id=None):
+    """Handle .nonblock command — add/list/clear the non-blocking filter."""
+    args = args_text.strip()
+
+    if not args:
+        lines = [f"**Non-blocking list** ({len(NON_BLOCKING_EVENTS)} entries):"]
+        if NON_BLOCKING_EVENTS:
+            for entry in NON_BLOCKING_EVENTS:
+                tag = " *(runtime)*" if entry in _runtime_nonblocking else " *(env)*"
+                lines.append(f"  • `{entry}`{tag}")
+        else:
+            lines.append("  *(empty)*")
+        lines.append("\nNon-blocking events are shown to the AI but don't block your free time.")
+        lines.append("Use `.nonblock <event>` to add, `.nonblock clear` to remove runtime entries.")
+        await reply("\n".join(lines))
+        return
+
+    if args.lower() == "clear":
+        removed = _remove_runtime_filter(NON_BLOCKING_EVENTS, _runtime_nonblocking)
+        _future_ctx_cache["ts"] = 0
+        if removed:
+            await reply(f"Removed {len(removed)} runtime non-blocking entr{'y' if len(removed) == 1 else 'ies'}: {', '.join(f'`{r}`' for r in removed)}")
+        else:
+            await reply("No runtime non-blocking entries to remove.")
+        return
+
+    if args.lower() == "last":
+        last_reply = ""
+        if hist_chan is not None and user_id is not None:
+            history = _get_history(hist_chan, user_id)
+            if history:
+                last_reply = history[-1][1]
+        if not last_reply:
+            await reply("No previous bot reply found. Use `.nonblock <event name>` to add events directly.")
+            return
+        events = _extract_events_from_reply(last_reply)
+        if not events:
+            await reply("Couldn't extract event names from the last reply. Use `.nonblock <event name>` directly.")
+            return
+        added = _add_to_filter(NON_BLOCKING_EVENTS, _runtime_nonblocking, events)
+        _future_ctx_cache["ts"] = 0
+        if added:
+            await reply(f"Added {len(added)} event(s) to non-blocking list: {', '.join(f'`{a}`' for a in added)}")
+        else:
+            await reply("All found events are already in the non-blocking list.")
+        return
+
+    names = [n.strip() for n in args.split(",") if n.strip()]
+    added = _add_to_filter(NON_BLOCKING_EVENTS, _runtime_nonblocking, names)
+    _future_ctx_cache["ts"] = 0
+    if added:
+        await reply(f"Added {len(added)} event(s) to non-blocking list: {', '.join(f'`{a}`' for a in added)}")
+    else:
+        await reply("All provided events are already in the non-blocking list (or names were empty).")
+
 # ── Slash commands ──
 
 @tree.command(name="help", description="Show available commands and tips")
@@ -1303,7 +1479,27 @@ async def slash_demo(interaction: discord.Interaction, action: str = ""):
         return
     await _handle_demo(interaction.response.send_message, action.lower(), str(interaction.user))
 
-@client.event
+@tree.command(name="ignore", description="Add events to ignore list (hidden from AI)")
+@app_commands.describe(events="Event name(s), comma-separated. Use 'last' for last reply, 'clear' to reset, or blank to list.")
+async def slash_ignore(interaction: discord.Interaction, events: str = ""):
+    if DISCORD_ALLOWED_USERS and interaction.user.id not in DISCORD_ALLOWED_USERS:
+        await interaction.response.send_message("You are not authorized.", ephemeral=True)
+        return
+    is_dm = interaction.guild is None
+    hist_chan = interaction.user.id if is_dm else interaction.channel_id
+    await _handle_ignore(interaction.response.send_message, events, hist_chan, interaction.user.id)
+
+@tree.command(name="nonblock", description="Mark events as non-blocking (shown but don't block free time)")
+@app_commands.describe(events="Event name(s), comma-separated. Use 'last' for last reply, 'clear' to reset, or blank to list.")
+async def slash_nonblock(interaction: discord.Interaction, events: str = ""):
+    if DISCORD_ALLOWED_USERS and interaction.user.id not in DISCORD_ALLOWED_USERS:
+        await interaction.response.send_message("You are not authorized.", ephemeral=True)
+        return
+    is_dm = interaction.guild is None
+    hist_chan = interaction.user.id if is_dm else interaction.channel_id
+    await _handle_nonblock(interaction.response.send_message, events, hist_chan, interaction.user.id)
+
+
 async def on_ready():
     global _scheduler_started, _tree_synced, _ready_at
     _ready_at = datetime.now(TZ)
@@ -1394,7 +1590,32 @@ async def on_message(message):
         await _handle_demo(message.reply, arg, str(message.author))
         return
 
-    print(f"[Chat] {message.author}: {question[:80]}{'…' if len(question) > 80 else ''}")
+    # .ignore command — add events to the ignore filter
+    if question.lower().startswith(".ignore"):
+        hist_chan = message.author.id if is_dm else message.channel.id
+        await _handle_ignore(message.reply, question[7:].strip(), hist_chan, message.author.id)
+        return
+
+    # .nonblock command — add events to the non-blocking filter
+    if question.lower().startswith(".nonblock"):
+        hist_chan = message.author.id if is_dm else message.channel.id
+        await _handle_nonblock(message.reply, question[9:].strip(), hist_chan, message.author.id)
+        return
+
+    # Natural-language shortcuts: "add X to ignore list" / "mark X as non-blocking"
+    _nl_ignore_m = _NL_IGNORE_RE.match(question)
+    if _nl_ignore_m:
+        hist_chan = message.author.id if is_dm else message.channel.id
+        await _handle_ignore(message.reply, _nl_ignore_m.group(1).strip(), hist_chan, message.author.id)
+        return
+
+    _nl_nonblock_m = _NL_NONBLOCK_RE.match(question)
+    if _nl_nonblock_m:
+        hist_chan = message.author.id if is_dm else message.channel.id
+        await _handle_nonblock(message.reply, _nl_nonblock_m.group(1).strip(), hist_chan, message.author.id)
+        return
+
+
     # Use author ID as channel key for DMs (DM channel IDs can change)
     hist_chan = message.author.id if is_dm else message.channel.id
 
