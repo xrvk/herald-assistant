@@ -11,7 +11,7 @@ Runs as a Docker container with your choice of LLM backend.
 | **Weeknight digest** | Tomorrow's work events — configurable days/time (off by default, see SETUP.md to enable) |
 | **Weekend preview** | Fri–Sun events grouped by day — configurable day/time (off by default, see SETUP.md to enable) |
 | **Interactive chat** (Discord DM or channel) | Ask anything about your schedule — powered by Gemini or Ollama |
-| **Bot commands** | `!cal` (list calendars), `!llm` (show backend), `.llm g`/`o` (switch backend). `.` also works as a prefix (handy on mobile keyboards) |
+| **Bot commands** | `.help`, `.cal`, `.llm`, `.ignore`, `.infoevent`, `.demo` — also available as `/slash` commands |
 
 **Example questions you can ask the bot:**
 - "Am I free Tuesday afternoon?"
@@ -93,10 +93,42 @@ All config lives in a single `.env` file — copy [.env.example](.env.example) a
 | `WEEKNIGHT_SCHEDULE` | `off` | Weeknight digest schedule: `"days HH:MM"` or `off` |
 | `WEEKEND_SCHEDULE` | `off` | Weekend preview schedule: `"days HH:MM"` or `off` |
 | `DISCORD_ALLOWED_USERS` | *(not set)* | Security: bot will only respond to these Discord user IDs (comma-separated). If unset, all users can interact |
+| `IGNORED_EVENTS` | *(not set)* | Optional seed for the ignore list (comma-separated substrings, case-insensitive). Quotes and special chars stripped for fuzzy matching. Can also be managed at runtime with `.ignore` — no initial setup required |
+| `INFO_EVENTS` | *(not set)* | Optional seed for the info-event list (same format as `IGNORED_EVENTS`). Can also be managed at runtime with `.infoevent` — no initial setup required |
+| `MAX_OUTPUT_TOKENS` | `512` | Max LLM response tokens (increase for longer answers) |
 
 See [SETUP.md](SETUP.md#5-configure) and [.env.example](.env.example) for the full list of tuning options (calendar labels, event filtering, history settings, conversation memory, system prompt override, etc.).
 
 > **Note on past events:** History questions (e.g. "what did I have yesterday?") work by reading past events from your calendar feeds. Some calendar providers don't include past events in their feeds, which limits how far back the bot can look. The bot logs a warning at startup if a calendar returns no past events.
+
+## Event Filters
+
+Two filter lists let you control how events are presented to the AI:
+
+| Filter | Bot command | Effect |
+|---|---|---|
+| **Ignored** | `.ignore` | Event is hidden from both digests and the LLM entirely |
+| **Info-event** | `.infoevent` | Event is visible to the LLM but tagged as informational (doesn't affect availability) |
+
+Both lists support the same sub-commands:
+
+```
+.ignore                       # show current list
+.ignore lunch, canceled       # add one or more events (comma-separated)
+.ignore remove lunch          # remove a specific entry
+.ignore last                  # add events extracted from the last bot reply
+.ignore remove all            # remove all entries
+```
+
+You can optionally **seed** the lists at startup via env vars — useful for recurring events you always want filtered:
+
+```env
+IGNORED_EVENTS="pick up kids,lunch,Mom's Appointment"
+INFO_EVENTS="Mom Babysit,Dog Walker,Lunch Break"
+```
+
+These are entirely optional — both lists start empty if not set and can be built up through bot commands alone.
+**All changes are automatically persisted to `filters.json`** and reloaded on restart — no action needed. In Docker, the provided `docker-compose.yaml` mounts a named volume so the file survives container rebuilds.
 
 ## Project Structure
 

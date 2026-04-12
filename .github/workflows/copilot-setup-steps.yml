@@ -1,0 +1,61 @@
+name: "Copilot Setup Steps"
+
+# Runs automatically on changes so you can validate it works.
+# Also available via Actions → "Run workflow" to test manually.
+on:
+    workflow_dispatch:
+    push:
+        paths:
+            - .github/workflows/copilot-setup-steps.yml
+            - requirements.txt
+            - tests/test_unit.py
+    pull_request:
+        paths:
+            - .github/workflows/copilot-setup-steps.yml
+            - requirements.txt
+            - tests/test_unit.py
+
+jobs:
+    # Job name MUST be `copilot-setup-steps` — Copilot won't pick it up otherwise.
+    copilot-setup-steps:
+        runs-on: ubuntu-latest
+        environment: copilot
+
+        permissions:
+            contents: read
+
+        # Non-secret defaults so main.py can be imported/explored without crashing.
+        # These fake values satisfy the startup validation in main.py.
+        # ── Real secrets go in Settings → Environments → copilot ──
+        #   DISCORD_BOT_TOKEN   (required to run the bot live)
+        #   GEMINI_API_KEY      (required if LLM_BACKEND=gemini)
+        env:
+            LLM_BACKEND: ollama
+            OLLAMA_URL: http://localhost:11434
+            OLLAMA_MODEL: gemma4:e4b
+            CALENDAR_1_URL: https://example.com/demo-calendar.ics
+            CALENDAR_1_LABEL: Demo
+            DISCORD_BOT_TOKEN: fake-token-for-testing
+            WEEKNIGHT_SCHEDULE: "off"
+            WEEKEND_SCHEDULE: "off"
+            FILTERS_PATH: /tmp/scout-test-filters.json
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Set up Python 3.11
+              uses: actions/setup-python@v5
+              with:
+                  python-version: "3.11"
+                  cache: "pip"
+
+            - name: Install dependencies
+              run: |
+                  python -m pip install --upgrade pip
+                  python -m pip install -r requirements.txt pytest
+
+            # Confirms all 152 unit tests pass in this environment.
+            # Tests are fully self-contained — no bot, network, or real credentials needed.
+            - name: Run unit tests
+              run: pytest tests/test_unit.py -v --tb=short

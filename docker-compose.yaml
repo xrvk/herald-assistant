@@ -5,6 +5,10 @@ services:
     restart: always
     env_file:
       - .env
+    environment:
+      - FILTERS_PATH=/app/data/filters.json
+    volumes:
+      - scout-data:/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     deploy:
@@ -23,3 +27,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+volumes:
+  scout-data:

@@ -2,7 +2,7 @@
 
 Complete deployment instructions for Scout Report. The recommended approach is Docker — it handles dependencies, auto-restarts on reboot, and keeps your host clean. A local (non-Docker) option is also provided.
 
-> **Fastest path:** Get a Gemini API key ([Step 4 Option A](#option-a-google-gemini-cloud--recommended)), set one calendar URL ([Step 1](#1-get-calendar-urls)), set `DISCORD_BOT_TOKEN` ([Step 2](#2-create-a-discord-bot)), and deploy ([Step 6](#6-deploy)). Scheduled digests are off by default in `.env.example`, so you don't need `APPRISE_URL` to get started.
+> **Fastest path:** `cp .env.example .env`, paste 3 values (`CALENDAR_1_URL`, `DISCORD_BOT_TOKEN`, `GEMINI_API_KEY`), and deploy ([Step 6](#6-deploy)). That's it — scheduled digests and all other settings are off/defaulted.
 
 ---
 
@@ -86,7 +86,7 @@ Each calendar gets its own label, which the LLM uses to distinguish events by so
 
 ## 3. Set Up Notifications (optional)
 
-Scheduled digests (weeknight, weekend preview) are sent to a Discord channel via webhook. If you don't want scheduled digests, skip this step — set `WEEKNIGHT_SCHEDULE=off` and `WEEKEND_SCHEDULE=off` in `.env`.
+Scheduled digests (weeknight, weekend preview) are sent to a Discord channel via webhook. If you don't want scheduled digests, skip this step — they're off by default.
 
 ### Discord Webhook
 
@@ -201,6 +201,8 @@ caffeinate -s &
 ```
 
 > The bot gracefully handles the Ollama host being unreachable — it replies with a friendly offline message instead of crashing.
+>
+> **Advanced — Gemini auto-fallback:** If you also set `GEMINI_API_KEY` in `.env` while using `LLM_BACKEND=ollama`, the bot silently switches to Gemini whenever Ollama is offline or times out (instead of returning an error). This is useful for running Ollama on a laptop that's not always on — questions still get answered via Gemini in the meantime. Once the fallback triggers, the bot stays on Gemini for that session; use `.llm o` to switch back to Ollama when it's available again. No extra configuration is needed beyond having both values set.
 
 #### Verify Ollama Is Running
 
@@ -220,9 +222,9 @@ In `.env`, set `LLM_BACKEND=ollama` (overrides the `gemini` default).
 cp .env.example .env
 ```
 
-Open `.env` in your editor and fill in the values you gathered from steps 1–4. The sections appear in the same order as the steps above — work through them top to bottom.
+Open `.env` and paste the 3 required values at the top: `CALENDAR_1_URL`, `DISCORD_BOT_TOKEN`, and `GEMINI_API_KEY`. Everything else is optional and has sensible defaults.
 
-If you're using Gemini (the default), the only required LLM setting is `GEMINI_API_KEY`. If you're using Ollama, also set `LLM_BACKEND=ollama`.
+If you're using Ollama instead of Gemini, also set `LLM_BACKEND=ollama` and leave `GEMINI_API_KEY` empty.
 
 Everything below the "Optional" divider has sensible defaults. This table covers optional tuning settings. For required and conditional variables, see the corresponding setup steps above or the summary in README.md.
 
@@ -234,7 +236,9 @@ Here's the full reference:
 | `WEEKNIGHT_SCHEDULE` | `off` | Weeknight digest schedule: `"days HH:MM"` or `off` |
 | `WEEKEND_SCHEDULE` | `off` | Weekend preview schedule: `"days HH:MM"` or `off` |
 | `WORK_LABELS` | *(not set)* | Comma-separated calendar labels treated as work (must match your `CALENDAR_N_LABEL` values). If empty, weeknight digests will show "No meetings" |
-| `IGNORED_EVENTS` | *(not set)* | Hide events from digests and LLM (comma-separated substrings, case-insensitive) |
+| `IGNORED_EVENTS` | *(not set)* | Optional seed for the ignore list. Comma-separated substrings, case-insensitive. Quotes and special characters are stripped automatically for fuzzy matching (e.g. `"Mom's Appt"` matches `Moms Appt`). Manage at runtime with `.ignore`. |
+| `INFO_EVENTS` | *(not set)* | Optional seed for the info-event list. Events visible to the LLM but tagged as informational — they don't affect your availability. Same format as `IGNORED_EVENTS`. Manage at runtime with `.infoevent`. |
+| `FILTERS_PATH` | `filters.json` | Path where `.ignore`/`.infoevent` changes are persisted across reboots. In Docker, set to `/app/data/filters.json` and mount a volume on `/app/data` (done automatically by the provided `docker-compose.yaml`). |
 | `CONTEXT_DAYS` | `7` | Days of future events the LLM can see |
 | `HISTORY_DAYS` | `10` | Days of past events for history questions (`0` = off) |
 | `HISTORY_CACHE_TTL` | `21600` | Past events cache in seconds (6h) |
@@ -247,15 +251,13 @@ Here's the full reference:
 
 > **Important:** Set `TZ` to your [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) (e.g., `Europe/London`, `Asia/Tokyo`). Default is `America/Los_Angeles`. This controls when scheduled digests fire and how times appear in the bot's answers.
 
-> **Minimum to start:** At least one calendar URL, a Gemini API key (or `LLM_BACKEND=ollama`), and a Discord bot token. Scheduled digests are off by default in `.env.example`. If you enable them, you'll also need `APPRISE_URL`.
+> **Minimum to start:** Paste 3 values into `.env` — a calendar URL, a Gemini API key (or set `LLM_BACKEND=ollama`), and a Discord bot token. Everything else is optional.
 >
 > **Minimum viable `.env`:**
 > ```env
 > CALENDAR_1_URL=https://your-calendar-url.ics
-> CALENDAR_1_LABEL=Personal
-> GEMINI_API_KEY=your_api_key_here
 > DISCORD_BOT_TOKEN=your_token_here
-> TZ=America/New_York
+> GEMINI_API_KEY=your_api_key_here
 > ```
 >
 > The bot validates config at startup and will tell you what's missing.
@@ -329,7 +331,7 @@ nohup python main.py > bot.log 2>&1 &
 
 1. **Check the bot is online:** It should appear as online in your Discord server
 2. **Send a test message:** Type a question in the configured channel or DM the bot
-3. **Try bot commands:** `!cal` lists connected calendars, `!llm` shows the active backend, `.llm g` / `.llm o` switches between Gemini and Ollama
+3. **Try bot commands:** `.cal` lists connected calendars, `.llm` shows the active backend, `.llm g` / `.llm o` switches between Gemini and Ollama
 4. **Expected response time:** 1–5 seconds with Gemini; 5–15 seconds with `gemma4:e4b` on Apple Silicon
 5. **Check scheduled jobs:** Look for the schedule summary in the bot's startup logs
 
