@@ -121,13 +121,7 @@ _add_calendar("GOOGLE_URL", os.getenv("GOOGLE_LABEL", "Google"))
 
 # Support numbered extra calendars: CALENDAR_1_URL + CALENDAR_1_LABEL, etc.
 for i in range(1, 10):
-    url = os.getenv(f"CALENDAR_{i}_URL")
-    label = os.getenv(f"CALENDAR_{i}_LABEL", f"Calendar {i}")
-    if url:
-        url = url.replace("webcal://", "https://")
-        if not url.startswith(("http://", "https://")):
-            raise RuntimeError(f"CALENDAR_{i}_URL must use http:// or https:// scheme, got: {url[:30]}...")
-        CALENDARS.append((label, url))
+    _add_calendar(f"CALENDAR_{i}_URL", os.getenv(f"CALENDAR_{i}_LABEL", f"Calendar {i}"))
 
 if not CALENDARS:
     raise RuntimeError("No calendar URLs configured. Set at least one of: ICLOUD_URL, OUTLOOK_URL, GOOGLE_URL, or CALENDAR_1_URL")
@@ -921,15 +915,12 @@ def _send_notification(title, body, digest_name="notification"):
 
 def _fetch_digest_events(start, end, label_filter=None):
     """Fetch events for digest notifications, optionally filtering by label."""
+    cal_data = _fetch_all_calendars()
     all_events = []
-    with _cal_lock:
-        cals_snapshot = list(CALENDARS)
-    for label, url in cals_snapshot:
+    for label, cal in cal_data:
         if label_filter and label not in label_filter:
             continue
-        cal = fetch_events(url)
-        if cal:
-            all_events += get_upcoming_events(cal, start, end)
+        all_events += get_upcoming_events(cal, start, end)
     return sorted(all_events, key=lambda x: x.dt)
 
 def send_work_update():
@@ -1083,8 +1074,8 @@ async def _handle_llm_show(reply):
     ollama_marker = " <-- **Current**" if current == "ollama" else ""
     gemini_rows = []
     model_info = [
-        ("gemini-2.5-flash-lite", "15 RPM, ~200ms TTFT"),
-        ("gemini-2.5-flash",      "10 RPM, ~300ms TTFT"),
+        (GEMINI_MODELS["flash-lite"], "15 RPM, ~200ms TTFT"),
+        (GEMINI_MODELS["flash"],      "10 RPM, ~300ms TTFT"),
     ]
     for m, info in model_info:
         marker = " <-- **Current**" if (current == "gemini" and cur_gmodel == m) else ""
@@ -1103,10 +1094,10 @@ _LLM_SWITCH_MAP = {
     "ollama":     ("ollama", None),
     "1":          ("ollama", None),
     "2":          ("gemini", None),
-    "fl":         ("gemini", "gemini-2.5-flash-lite"),
-    "flash-lite": ("gemini", "gemini-2.5-flash-lite"),
-    "gf":         ("gemini", "gemini-2.5-flash"),
-    "flash":      ("gemini", "gemini-2.5-flash"),
+    "fl":         ("gemini", GEMINI_MODELS["flash-lite"]),
+    "flash-lite": ("gemini", GEMINI_MODELS["flash-lite"]),
+    "gf":         ("gemini", GEMINI_MODELS["flash"]),
+    "flash":      ("gemini", GEMINI_MODELS["flash"]),
 }
 
 async def _handle_llm_switch(reply, choice, user_id, channel_id, is_dm, user_name="unknown"):
@@ -1429,6 +1420,9 @@ async def on_message(message):
         # Remove only the matching closing quote (if present) to preserve intent
         question = '.' + (rest[:-1] if rest.endswith(q) else rest)
 
+    # Use author ID as channel key for DMs (DM channel IDs can change)
+    hist_chan = message.author.id if is_dm else message.channel.id
+
     # .help command — show available commands and tips
     if question.lower().startswith(".help"):
         await _handle_help(message.reply)
@@ -1468,43 +1462,34 @@ async def on_message(message):
 
     # .ignore command — add events to the ignore filter
     if question.lower().startswith(".ignore"):
-        hist_chan = message.author.id if is_dm else message.channel.id
         await _handle_ignore(message.reply, question[7:].strip(), hist_chan, message.author.id)
         return
 
     # .infoevent / .ie command — add events to the info-event filter
     if question.lower().startswith(".infoevent"):
-        hist_chan = message.author.id if is_dm else message.channel.id
         await _handle_infoevent(message.reply, question[10:].strip(), hist_chan, message.author.id)
         return
 
     # .ie alias for .infoevent (checked after .infoevent)
     if question.lower().startswith(".ie") and (len(question) == 3 or not question[3:4].isalpha()):
-        hist_chan = message.author.id if is_dm else message.channel.id
         await _handle_infoevent(message.reply, question[3:].strip(), hist_chan, message.author.id)
         return
 
     # .ig alias for .ignore (checked after .ignore, .infoevent, .ie)
     if question.lower().startswith(".ig") and (len(question) == 3 or not question[3:4].isalpha()):
-        hist_chan = message.author.id if is_dm else message.channel.id
         await _handle_ignore(message.reply, question[3:].strip(), hist_chan, message.author.id)
         return
 
     # Natural-language shortcuts: "add X to ignore list" / "mark X as info event"
     _nl_ignore_m = _NL_IGNORE_RE.match(question)
     if _nl_ignore_m:
-        hist_chan = message.author.id if is_dm else message.channel.id
         await _handle_ignore(message.reply, _nl_ignore_m.group(1).strip(), hist_chan, message.author.id)
         return
 
     _nl_infoevent_m = _NL_INFOEVENT_RE.match(question)
     if _nl_infoevent_m:
-        hist_chan = message.author.id if is_dm else message.channel.id
         await _handle_infoevent(message.reply, _nl_infoevent_m.group(1).strip(), hist_chan, message.author.id)
         return
-
-    # Use author ID as channel key for DMs (DM channel IDs can change)
-    hist_chan = message.author.id if is_dm else message.channel.id
 
     # Per-user rate limiting — prevent single user from exhausting LLM API quota
     if _check_rate_limit(message.author.id):
@@ -1513,10 +1498,11 @@ async def on_message(message):
 
     try:
         async with message.channel.typing():
-            # Classify whether the question needs past events (skip if history disabled)
+            # Classify whether the question needs past events (skip if history disabled).
+            # classify_question is a fast regex match — no I/O, called directly.
             include_past = False
             if HISTORY_DAYS > 0:
-                classification = await asyncio.to_thread(classify_question, question)
+                classification = classify_question(question)
                 include_past = classification == "past"
                 if include_past:
                     print(f"[Chat] Including past events (classification: {classification})")
