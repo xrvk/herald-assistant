@@ -11,7 +11,7 @@ Runs as a Docker container with your choice of LLM backend.
 | **Weeknight digest** | Tomorrow's work events — configurable days/time (off by default, see SETUP.md to enable) |
 | **Weekend preview** | Fri–Sun events grouped by day — configurable day/time (off by default, see SETUP.md to enable) |
 | **Interactive chat** (Discord DM or channel) | Ask anything about your schedule — powered by Gemini or Ollama |
-| **Bot commands** | `.cal` (list calendars), `.llm` (show backend), `.llm g`/`o` (switch backend) |
+| **Bot commands** | `.help`, `.cal`, `.llm`, `.free`, `.demo` — also available as `/slash` commands |
 
 **Example questions you can ask the bot:**
 - "Am I free Tuesday afternoon?"
@@ -95,6 +95,8 @@ All config lives in a single `.env` file — copy [.env.example](.env.example) a
 | `DISCORD_ALLOWED_USERS` | *(not set)* | Security: bot will only respond to these Discord user IDs (comma-separated). If unset, all users can interact |
 | `IGNORED_EVENTS` | *(not set)* | Hide events from digests and LLM (comma-separated substrings, case-insensitive). Quotes and special chars stripped for fuzzy matching |
 | `NON_BLOCKING_EVENTS` | *(not set)* | Events visible to LLM but don't block your availability (same format as `IGNORED_EVENTS`) |
+| `MAX_OUTPUT_TOKENS` | `512` | Max LLM response tokens (increase for longer answers) |
+| `FREE_WORK_HOURS` | `8-17` | Work hours for `.free` command (24h format, e.g. `9-18`) |
 
 See [SETUP.md](SETUP.md#5-configure) and [.env.example](.env.example) for the full list of tuning options (calendar labels, event filtering, history settings, conversation memory, system prompt override, etc.).
 

@@ -84,6 +84,12 @@ from main import (
     get_backend,
     set_backend,
     SYSTEM_PROMPT,
+    _parse_free_args,
+    find_free_slots,
+    _format_free_slots,
+    _HELP_TEXT,
+    _LLM_SWITCH_MAP,
+    FREE_WORK_HOURS,
 )
 
 
@@ -735,3 +741,322 @@ class TestDemoCalendars:
         from tests.demo_calendars import generate_personal_ics, calendar_stats
         stats = calendar_stats(generate_personal_ics())
         assert stats["total_events"] >= 18
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 14. Free-Time Finder — Argument Parsing
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestParseFreeArgs:
+    """Verify _parse_free_args parses duration and day ranges correctly."""
+
+    def test_empty_defaults_to_30m_today(self):
+        min_dur, dates = _parse_free_args("")
+        assert min_dur == 30
+        assert len(dates) == 1
+        assert dates[0] == datetime.now(ZoneInfo("America/Los_Angeles")).date()
+
+    def test_duration_hours(self):
+        min_dur, dates = _parse_free_args("2h")
+        assert min_dur == 120
+        assert len(dates) == 1  # defaults to today
+
+    def test_duration_minutes(self):
+        min_dur, dates = _parse_free_args("45m")
+        assert min_dur == 45
+
+    def test_duration_with_day(self):
+        min_dur, dates = _parse_free_args("1h tomorrow")
+        assert min_dur == 60
+        today = datetime.now(ZoneInfo("America/Los_Angeles")).date()
+        assert dates[0] == today + timedelta(days=1)
+
+    def test_tomorrow_no_duration(self):
+        min_dur, dates = _parse_free_args("tomorrow")
+        assert min_dur == 30
+        today = datetime.now(ZoneInfo("America/Los_Angeles")).date()
+        assert dates[0] == today + timedelta(days=1)
+
+    def test_day_name(self):
+        min_dur, dates = _parse_free_args("monday")
+        assert min_dur == 30
+        assert dates[0].weekday() == 0  # Monday
+
+    def test_this_week_returns_multiple_days(self):
+        min_dur, dates = _parse_free_args("this week")
+        assert min_dur == 30
+        assert len(dates) >= 1
+        assert len(dates) <= 7
+
+    def test_next_week_returns_five_days(self):
+        min_dur, dates = _parse_free_args("next week")
+        assert min_dur == 30
+        assert len(dates) == 5
+        # All should be Mon-Fri
+        for d in dates:
+            assert d.weekday() < 5
+
+    def test_hr_unit(self):
+        min_dur, _ = _parse_free_args("2hr")
+        assert min_dur == 120
+
+    def test_hours_unit(self):
+        min_dur, _ = _parse_free_args("3hours")
+        assert min_dur == 180
+
+    def test_min_unit(self):
+        min_dur, _ = _parse_free_args("90min")
+        assert min_dur == 90
+
+    def test_unknown_day_defaults_to_today(self):
+        min_dur, dates = _parse_free_args("blahblah")
+        assert len(dates) == 1  # falls back to today
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 15. Free-Time Finder — Slot Calculation
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestFindFreeSlots:
+    """Verify find_free_slots computes gaps correctly."""
+
+    def test_empty_day_returns_full_range(self):
+        """Day with no events returns one big free slot."""
+        tomorrow = (datetime.now(ZoneInfo("America/Los_Angeles")) + timedelta(days=1)).date()
+        with patch("main._fetch_all_calendars", return_value=[]):
+            slots = find_free_slots(tomorrow, min_duration_min=30, work_hours=(9, 17))
+        assert len(slots) == 1
+        start, end, dur = slots[0]
+        assert dur == 480  # 8 hours
+
+    def test_single_event_creates_two_gaps(self):
+        """A single mid-day event creates gaps before and after."""
+        tz = ZoneInfo("America/Los_Angeles")
+        tomorrow = (datetime.now(tz) + timedelta(days=1)).date()
+        event = Event(
+            dt=datetime.combine(tomorrow, datetime.min.time()).replace(hour=12, tzinfo=tz),
+            summary="Meeting",
+            duration_min=60,
+            all_day=False,
+            normalized_summary="meeting",
+        )
+        fake_cal = MagicMock()
+        with patch("main._fetch_all_calendars", return_value=[("Work", fake_cal)]):
+            with patch("main.get_upcoming_events", return_value=[event]):
+                slots = find_free_slots(tomorrow, min_duration_min=30, work_hours=(9, 17))
+        assert len(slots) == 2
+        # First gap: 9am-12pm = 180 min
+        assert slots[0][2] == 180
+        # Second gap: 1pm-5pm = 240 min
+        assert slots[1][2] == 240
+
+    def test_all_day_events_excluded(self):
+        """All-day events should not block time."""
+        tz = ZoneInfo("America/Los_Angeles")
+        tomorrow = (datetime.now(tz) + timedelta(days=1)).date()
+        event = Event(
+            dt=datetime.combine(tomorrow, datetime.min.time()).replace(tzinfo=tz),
+            summary="Birthday",
+            duration_min=None,
+            all_day=True,
+            normalized_summary="birthday",
+        )
+        fake_cal = MagicMock()
+        with patch("main._fetch_all_calendars", return_value=[("Personal", fake_cal)]):
+            with patch("main.get_upcoming_events", return_value=[event]):
+                slots = find_free_slots(tomorrow, min_duration_min=30, work_hours=(9, 17))
+        assert len(slots) == 1
+        assert slots[0][2] == 480  # full day free
+
+    def test_overlapping_events_merged(self):
+        """Overlapping events should be merged before gap calculation."""
+        tz = ZoneInfo("America/Los_Angeles")
+        tomorrow = (datetime.now(tz) + timedelta(days=1)).date()
+        e1 = Event(
+            dt=datetime.combine(tomorrow, datetime.min.time()).replace(hour=10, tzinfo=tz),
+            summary="Meeting 1", duration_min=90, all_day=False, normalized_summary="meeting 1",
+        )
+        e2 = Event(
+            dt=datetime.combine(tomorrow, datetime.min.time()).replace(hour=11, tzinfo=tz),
+            summary="Meeting 2", duration_min=60, all_day=False, normalized_summary="meeting 2",
+        )
+        fake_cal = MagicMock()
+        with patch("main._fetch_all_calendars", return_value=[("Work", fake_cal)]):
+            with patch("main.get_upcoming_events", return_value=[e1, e2]):
+                slots = find_free_slots(tomorrow, min_duration_min=30, work_hours=(9, 17))
+        # e1: 10:00-11:30, e2: 11:00-12:00 → merged: 10:00-12:00
+        # gaps: 9-10 (60m), 12-17 (300m)
+        assert len(slots) == 2
+        assert slots[0][2] == 60
+        assert slots[1][2] == 300
+
+    def test_duration_filter(self):
+        """Slots smaller than min_duration_min are excluded."""
+        tz = ZoneInfo("America/Los_Angeles")
+        tomorrow = (datetime.now(tz) + timedelta(days=1)).date()
+        # Event from 9:15 to 17:00 — leaves only a 15-min gap at start
+        event = Event(
+            dt=datetime.combine(tomorrow, datetime.min.time()).replace(hour=9, minute=15, tzinfo=tz),
+            summary="Long meeting", duration_min=465, all_day=False, normalized_summary="long meeting",
+        )
+        fake_cal = MagicMock()
+        with patch("main._fetch_all_calendars", return_value=[("Work", fake_cal)]):
+            with patch("main.get_upcoming_events", return_value=[event]):
+                slots = find_free_slots(tomorrow, min_duration_min=30, work_hours=(9, 17))
+        assert len(slots) == 0  # 15 min gap is below threshold
+
+    def test_custom_work_hours(self):
+        """Custom work hours are respected."""
+        tomorrow = (datetime.now(ZoneInfo("America/Los_Angeles")) + timedelta(days=1)).date()
+        with patch("main._fetch_all_calendars", return_value=[]):
+            slots = find_free_slots(tomorrow, min_duration_min=30, work_hours=(10, 14))
+        assert len(slots) == 1
+        assert slots[0][2] == 240  # 4 hours
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 16. Free-Time Finder — Formatting
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestFormatFreeSlots:
+    """Verify _format_free_slots output."""
+
+    def test_no_slots(self):
+        d = date(2026, 4, 15)
+        result = _format_free_slots([d], 60, {d: []})
+        assert "No free slots" in result
+
+    def test_single_day_slots(self):
+        tz = ZoneInfo("America/Los_Angeles")
+        d = date(2026, 4, 15)
+        start = datetime(2026, 4, 15, 9, 0, tzinfo=tz)
+        end = datetime(2026, 4, 15, 12, 0, tzinfo=tz)
+        result = _format_free_slots([d], 30, {d: [(start, end, 180)]})
+        assert "09:00 AM" in result
+        assert "12:00 PM" in result
+        assert "(3h)" in result
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 17. Fetch Events — Retry Logic
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestFetchEventsRetry:
+    """Verify fetch_events retries on transient errors."""
+
+    @pytest.fixture(autouse=True)
+    def clean_cache(self):
+        _cal_cache.pop("https://retry-test.cal/feed.ics", None)
+        yield
+        _cal_cache.pop("https://retry-test.cal/feed.ics", None)
+
+    def test_retry_on_connection_error_then_success(self):
+        """ConnectionError on first attempt, success on retry."""
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = "BEGIN:VCALENDAR\nEND:VCALENDAR"
+        with patch("main.requests.get", side_effect=[
+            requests.exceptions.ConnectionError("connection refused"),
+            mock_resp,
+        ]):
+            with patch("main.time.sleep"):  # skip retry delay
+                result = fetch_events("https://retry-test.cal/feed.ics")
+        assert result is not None
+
+    def test_retry_on_500_then_success(self):
+        """HTTP 500 on first attempt, success on retry."""
+        err_resp = MagicMock()
+        err_resp.status_code = 500
+        err_resp.raise_for_status = MagicMock(
+            side_effect=requests.exceptions.HTTPError(response=err_resp)
+        )
+
+        ok_resp = MagicMock()
+        ok_resp.status_code = 200
+        ok_resp.text = "BEGIN:VCALENDAR\nEND:VCALENDAR"
+        ok_resp.raise_for_status = MagicMock()
+
+        with patch("main.requests.get", side_effect=[err_resp, ok_resp]):
+            with patch("main.time.sleep"):
+                result = fetch_events("https://retry-test.cal/feed.ics")
+        assert result is not None
+
+    def test_no_retry_on_404(self):
+        """HTTP 404 should not be retried."""
+        err_resp = MagicMock()
+        err_resp.status_code = 404
+        err_resp.raise_for_status = MagicMock(
+            side_effect=requests.exceptions.HTTPError(response=err_resp)
+        )
+
+        with patch("main.requests.get", return_value=err_resp) as mock_get:
+            with patch("main.time.sleep"):
+                result = fetch_events("https://retry-test.cal/feed.ics")
+        # Should only call get once (no retry for 404)
+        assert mock_get.call_count == 1
+        assert result is None
+
+    def test_retry_exhausted_falls_back_to_stale(self):
+        """After retry is exhausted, falls back to stale cache."""
+        fake_cal = MagicMock()
+        _cal_cache["https://retry-test.cal/feed.ics"] = (fake_cal, 0)  # stale
+        with patch("main.requests.get", side_effect=requests.exceptions.Timeout):
+            with patch("main.time.sleep"):
+                result = fetch_events("https://retry-test.cal/feed.ics")
+        assert result is fake_cal
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 18. Help Text & LLM Switch Map
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestHelpText:
+    """Verify help text contains all command names."""
+
+    def test_contains_all_commands(self):
+        for cmd in [".help", ".cal", ".llm", ".free", ".demo"]:
+            assert cmd in _HELP_TEXT, f"Missing command {cmd} in help text"
+
+    def test_contains_example_questions(self):
+        assert "free Tuesday" in _HELP_TEXT or "calendar" in _HELP_TEXT
+
+
+class TestLlmSwitchMap:
+    """Verify switch map covers expected aliases."""
+
+    def test_all_shortcuts_present(self):
+        for key in ["g", "gemini", "o", "ollama", "fl", "gf", "flash", "flash-lite", "1", "2"]:
+            assert key in _LLM_SWITCH_MAP
+
+    def test_values_are_valid(self):
+        for key, (backend, model) in _LLM_SWITCH_MAP.items():
+            assert backend in ("ollama", "gemini")
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 19. MAX_OUTPUT_TOKENS env var
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestMaxOutputTokens:
+    """Verify MAX_OUTPUT_TOKENS is configurable."""
+
+    def test_default_value(self):
+        assert _MAX_OUTPUT_TOKENS == 512
+
+    def test_is_integer(self):
+        assert isinstance(_MAX_OUTPUT_TOKENS, int)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 20. FREE_WORK_HOURS config
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestFreeWorkHours:
+    """Verify FREE_WORK_HOURS default parsing."""
+
+    def test_default_value(self):
+        assert FREE_WORK_HOURS == (8, 17)
+
+    def test_is_tuple(self):
+        assert isinstance(FREE_WORK_HOURS, tuple)
+        assert len(FREE_WORK_HOURS) == 2

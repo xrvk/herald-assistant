@@ -1,6 +1,8 @@
 import os
 import re
 import asyncio
+import atexit
+import signal
 import time
 import threading
 import requests
@@ -12,6 +14,7 @@ from typing import NamedTuple, Optional
 from collections import deque
 import apprise
 import discord
+from discord import app_commands
 import recurring_ical_events
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -76,8 +79,8 @@ if _llm_backend == "gemini":
 else:
     print(f"LLM backend: Ollama ({OLLAMA_MODEL} at {OLLAMA_URL})")
 
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-DISCORD_CHANNEL_ID = os.getenv("DISCORD_CHANNEL_ID")
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN") or None
+DISCORD_CHANNEL_ID = os.getenv("DISCORD_CHANNEL_ID") or None
 
 # Validate DISCORD_CHANNEL_ID is numeric if set
 if DISCORD_CHANNEL_ID and not DISCORD_CHANNEL_ID.strip().isdigit():
@@ -179,15 +182,15 @@ def _parse_schedule(raw, default_days, default_time):
         raise ValueError(f"Invalid time: {h:02d}:{m:02d} — hour must be 0-23, minute 0-59")
     return (days.strip(), h, m)
 
-# Weeknight digest: tomorrow's work events (default: Sun-Thu 20:00)
+# Weeknight digest: tomorrow's work events (off unless configured)
 try:
-    _weeknight = _parse_schedule(os.getenv("WEEKNIGHT_SCHEDULE", "sun,mon,tue,wed,thu 20:00"), "sun,mon,tue,wed,thu", "20:00")
+    _weeknight = _parse_schedule(os.getenv("WEEKNIGHT_SCHEDULE", "off"), "sun,mon,tue,wed,thu", "20:00")
 except (ValueError, IndexError) as e:
     raise RuntimeError(f"Invalid WEEKNIGHT_SCHEDULE: {os.getenv('WEEKNIGHT_SCHEDULE')!r} — {e}") from e
 
-# Weekend preview: Fri-Sun events (default: Thu 16:00)
+# Weekend preview: Fri-Sun events (off unless configured)
 try:
-    _weekend = _parse_schedule(os.getenv("WEEKEND_SCHEDULE", "thu 16:00"), "thu", "16:00")
+    _weekend = _parse_schedule(os.getenv("WEEKEND_SCHEDULE", "off"), "thu", "16:00")
 except (ValueError, IndexError) as e:
     raise RuntimeError(f"Invalid WEEKEND_SCHEDULE: {os.getenv('WEEKEND_SCHEDULE')!r} — {e}") from e
 
@@ -219,7 +222,7 @@ _CONV_ANSWER_TRUNC = 500  # max chars stored per bot response (token budget)
 # ── Named constants (avoid magic numbers) ──
 _OLLAMA_CTX_BASE = 8192
 _OLLAMA_CTX_WITH_PAST = 12288
-_MAX_OUTPUT_TOKENS = 512
+_MAX_OUTPUT_TOKENS = int(os.getenv("MAX_OUTPUT_TOKENS", "512"))
 _KEEP_ALIVE_INTERVAL_MIN = 4
 _DISCORD_MSG_LIMIT = 1900
 
@@ -321,19 +324,39 @@ def fetch_events(url):
         if cached and (now - cached[1]) < _CAL_CACHE_TTL:
             return cached[0]
         cal_label = _cal_labels.get(url, "unknown")
-        try:
-            response = requests.get(url, timeout=30)
-            response.raise_for_status()
-            cal = Calendar.from_ical(response.text)
-            with _cal_lock:
-                _cal_cache[url] = (cal, time.time())
-            return cal
-        except requests.RequestException as e:
-            print(f"Error fetching calendar '{cal_label}': {type(e).__name__}: {e.response.status_code if hasattr(e, 'response') and e.response else 'connection failed'}")
-            # Return stale cache on error if available
-            if cached:
-                return cached[0]
-            return None
+        last_err = None
+        for attempt in range(2):  # 1 try + 1 retry
+            try:
+                response = requests.get(url, timeout=30)
+                response.raise_for_status()
+                cal = Calendar.from_ical(response.text)
+                with _cal_lock:
+                    _cal_cache[url] = (cal, time.time())
+                return cal
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                last_err = e
+                if attempt == 0:
+                    print(f"[Retry] Calendar '{cal_label}': {type(e).__name__}, retrying in 2s...")
+                    time.sleep(2)
+                    continue
+            except requests.RequestException as e:
+                status = getattr(e.response, 'status_code', None) if hasattr(e, 'response') else None
+                if attempt == 0 and status and status >= 500:
+                    print(f"[Retry] Calendar '{cal_label}': HTTP {status}, retrying in 2s...")
+                    last_err = e
+                    time.sleep(2)
+                    continue
+                last_err = e
+                break  # 4xx or second attempt — don't retry
+        # All attempts failed
+        if last_err:
+            status_info = getattr(last_err, 'response', None)
+            status_str = str(status_info.status_code) if status_info else 'connection failed'
+            print(f"Error fetching calendar '{cal_label}': {type(last_err).__name__}: {status_str}")
+        # Return stale cache on error if available
+        if cached:
+            return cached[0]
+        return None
 
 def get_upcoming_events(calendar, start_date, end_date):
     """Filter events within a specific time range, expanding recurring events."""
@@ -580,6 +603,183 @@ def classify_question(question):
 
     # No clear signal — default to future (most common intent)
     return "future"
+
+# ── Free-time finder ──
+
+# Work hours for .free command (format: "8-17" for 8am-5pm)
+_free_wh_raw = os.getenv("FREE_WORK_HOURS", "8-17")
+try:
+    _fwh_start, _fwh_end = (int(x) for x in _free_wh_raw.split("-", 1))
+    if not (0 <= _fwh_start < _fwh_end <= 24):
+        raise ValueError
+    FREE_WORK_HOURS = (_fwh_start, _fwh_end)
+except (ValueError, TypeError):
+    raise RuntimeError(f"FREE_WORK_HOURS must be 'H-H' (e.g. '8-17'), got: {_free_wh_raw!r}")
+
+# Day name → weekday number (Monday=0)
+_DAY_NAMES = {
+    "monday": 0, "mon": 0, "tuesday": 1, "tue": 1, "tues": 1,
+    "wednesday": 2, "wed": 2, "thursday": 3, "thu": 3, "thurs": 3,
+    "friday": 4, "fri": 4, "saturday": 5, "sat": 5, "sunday": 6, "sun": 6,
+}
+
+_FREE_DURATION_RE = re.compile(r"(\d+)\s*(h|hr|hrs|hour|hours|m|min|mins|minutes?)", re.IGNORECASE)
+_FREE_MAX_SLOTS = 10  # cap displayed slots to fit Discord limit
+
+def _parse_free_args(text):
+    """Parse .free arguments into (min_duration_minutes, list_of_dates).
+
+    Examples:
+        '' → (30, [today])
+        '1h' → (60, [today])
+        '2h tomorrow' → (120, [tomorrow])
+        '30m this week' → (30, [today..end_of_week])
+        'next week' → (30, [next_mon..next_fri])
+        'wednesday' → (30, [next wednesday or today if wed])
+    """
+    text = text.strip().lower()
+    now = datetime.now(TZ)
+    today = now.date()
+
+    # Parse duration (if present)
+    dur_match = _FREE_DURATION_RE.search(text)
+    if dur_match:
+        val = int(dur_match.group(1))
+        unit = dur_match.group(2)[0]  # 'h' or 'm'
+        min_dur = val * 60 if unit == 'h' else val
+        text = (text[:dur_match.start()] + text[dur_match.end():]).strip()
+    else:
+        min_dur = 30
+
+    # Parse day range from remaining text
+    if not text or text == "today":
+        dates = [today]
+    elif text == "tomorrow":
+        dates = [today + timedelta(days=1)]
+    elif text in ("this week", "week"):
+        # Today through end of work week (Friday)
+        days_until_fri = (4 - today.weekday()) % 7
+        if days_until_fri == 0 and today.weekday() == 4:
+            dates = [today]  # it's Friday, just show today
+        elif today.weekday() > 4:
+            # Weekend — show next Mon-Fri
+            days_until_mon = (7 - today.weekday()) % 7
+            mon = today + timedelta(days=days_until_mon)
+            dates = [mon + timedelta(days=i) for i in range(5)]
+        else:
+            dates = [today + timedelta(days=i) for i in range(days_until_fri + 1)]
+    elif text == "next week":
+        days_until_mon = (7 - today.weekday()) % 7
+        if days_until_mon == 0:
+            days_until_mon = 7
+        mon = today + timedelta(days=days_until_mon)
+        dates = [mon + timedelta(days=i) for i in range(5)]
+    else:
+        # Try to match a day name
+        day_num = _DAY_NAMES.get(text)
+        if day_num is not None:
+            delta = (day_num - today.weekday()) % 7
+            if delta == 0:
+                delta = 0  # today is that day
+            target = today + timedelta(days=delta)
+            dates = [target]
+        else:
+            # Fallback: today
+            dates = [today]
+
+    # Cap at 7 days
+    dates = dates[:7]
+    return min_dur, dates
+
+def find_free_slots(target_date, min_duration_min=30, work_hours=None):
+    """Find free time slots on a given date.
+
+    Returns list of (start_datetime, end_datetime, duration_minutes) tuples
+    for gaps ≥ min_duration_min within work hours.
+    """
+    if work_hours is None:
+        work_hours = FREE_WORK_HOURS
+    wh_start, wh_end = work_hours
+    day_start = datetime.combine(target_date, datetime.min.time()).replace(
+        hour=wh_start, tzinfo=TZ
+    )
+    day_end = datetime.combine(target_date, datetime.min.time()).replace(
+        hour=wh_end, tzinfo=TZ
+    )
+
+    # Fetch events for this day across all calendars
+    cal_data = _fetch_all_calendars()
+    busy = []
+    for label, cal in cal_data:
+        events = get_upcoming_events(cal, day_start, day_end)
+        for e in events:
+            if e.all_day:
+                continue  # all-day events don't block time
+            if NON_BLOCKING_EVENTS and any(nb in e.normalized_summary for nb in NON_BLOCKING_EVENTS):
+                continue  # non-blocking events don't block time
+            end_dt = e.dt + timedelta(minutes=e.duration_min) if e.duration_min else e.dt + timedelta(hours=1)
+            # Clamp to work hours
+            ev_start = max(e.dt, day_start)
+            ev_end = min(end_dt, day_end)
+            if ev_start < ev_end:
+                busy.append((ev_start, ev_end))
+
+    # Sort and merge overlapping busy ranges
+    busy.sort()
+    merged = []
+    for start, end in busy:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+
+    # Find gaps
+    slots = []
+    cursor = day_start
+    for busy_start, busy_end in merged:
+        if cursor < busy_start:
+            gap_min = int((busy_start - cursor).total_seconds() / 60)
+            if gap_min >= min_duration_min:
+                slots.append((cursor, busy_start, gap_min))
+        cursor = max(cursor, busy_end)
+    # Final gap after last event
+    if cursor < day_end:
+        gap_min = int((day_end - cursor).total_seconds() / 60)
+        if gap_min >= min_duration_min:
+            slots.append((cursor, day_end, gap_min))
+
+    return slots
+
+def _format_free_slots(dates, min_dur, slots_by_date):
+    """Format free-time results for Discord reply."""
+    if not any(slots_by_date.values()):
+        dur_str = f"{min_dur}m" if min_dur < 60 else f"{min_dur // 60}h"
+        return f"No free slots of {dur_str}+ found for the requested day(s)."
+
+    lines = []
+    total_shown = 0
+    total_remaining = 0
+    for d in dates:
+        slots = slots_by_date.get(d, [])
+        day_label = d.strftime("%A, %b %d")
+        if not slots:
+            lines.append(f"**{day_label}**: No free slots")
+            continue
+        lines.append(f"**{day_label}**:")
+        for start, end, dur in slots:
+            if total_shown >= _FREE_MAX_SLOTS:
+                total_remaining += 1
+                continue
+            dur_str = _format_duration(dur)
+            lines.append(f"  • {start.strftime('%I:%M %p')} – {end.strftime('%I:%M %p')} {dur_str}")
+            total_shown += 1
+
+    if total_remaining:
+        lines.append(f"\n*…and {total_remaining} more slot(s) not shown*")
+
+    dur_label = f"{min_dur}m" if min_dur < 60 else f"{min_dur // 60}h"
+    header = f"🕐 Free slots ({dur_label}+ gaps, {FREE_WORK_HOURS[0]}am–{FREE_WORK_HOURS[1] if FREE_WORK_HOURS[1] <= 12 else FREE_WORK_HOURS[1] - 12}pm):\n"
+    return header + "\n".join(lines)
 
 # ── Conversation history helpers ──
 
@@ -870,8 +1070,10 @@ _async_cleanup_conv_history = _make_async(_cleanup_conv_history)
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
+tree = app_commands.CommandTree(client)
 
 _scheduler_started = False
+_tree_synced = False
 _scheduler_lock = asyncio.Lock()
 _ready_at = None
 _demo_real_calendars = None  # saved real calendars when demo mode is active
@@ -893,9 +1095,217 @@ def _configure_scheduler():
     scheduler.add_job(_async_cleanup_conv_history, "interval", minutes=10)
     return scheduler
 
+# ── Shared command handlers (used by both prefix and slash commands) ──
+
+_HELP_TEXT = (
+    "**Scout Report** — Calendar Assistant\n\n"
+    "**Commands**\n"
+    "`.help` — Show this help message\n"
+    "`.cal` — List connected calendars\n"
+    "`.llm` — Show/switch LLM backend\n"
+    "`.free [duration] [day]` — Find free time slots\n"
+    "`.demo` / `.demo off` — Toggle demo calendars\n\n"
+    "**`.free` examples**\n"
+    "`.free` — 30min+ gaps today\n"
+    "`.free 1h tomorrow` — 1hr+ gaps tomorrow\n"
+    "`.free 2h this week` — 2hr+ gaps through Friday\n"
+    "`.free 45m next week` — next Mon–Fri\n\n"
+    "**Or just ask a question** — no command needed!\n"
+    "• *Am I free Tuesday afternoon?*\n"
+    "• *What's on my calendar this weekend?*\n"
+    "• *Recap last week's meetings*"
+)
+
+async def _handle_help(reply):
+    await reply(_HELP_TEXT)
+
+async def _handle_cal(reply):
+    with _cal_lock:
+        labels = [label for label, _ in CALENDARS]
+    lines = [f"Connected calendars ({len(labels)}):"]
+    lines.extend(f"{i}. **{label}**" for i, label in enumerate(labels, start=1))
+    await reply("\n".join(lines))
+
+async def _handle_llm_show(reply):
+    current = get_backend()
+    cur_gmodel = get_gemini_model()
+    ollama_marker = " <-- **Current**" if current == "ollama" else ""
+    gemini_rows = []
+    model_info = [
+        ("gemini-2.5-flash-lite", "15 RPM, ~200ms TTFT"),
+        ("gemini-2.5-flash",      "10 RPM, ~300ms TTFT"),
+    ]
+    for m, info in model_info:
+        marker = " <-- **Current**" if (current == "gemini" and cur_gmodel == m) else ""
+        gemini_rows.append(f"   • `{m}` — {info}{marker}")
+    await reply(
+        f"1. **Ollama** — model: `{OLLAMA_MODEL}`{ollama_marker}\n"
+        f"2. **Gemini** models:\n"
+        + "\n".join(gemini_rows) + "\n\n"
+        "Switch with: `.llm o`, `.llm fl`, `.llm gf`"
+    )
+
+_LLM_SWITCH_MAP = {
+    "g":          ("gemini", None),
+    "gemini":     ("gemini", None),
+    "o":          ("ollama", None),
+    "ollama":     ("ollama", None),
+    "1":          ("ollama", None),
+    "2":          ("gemini", None),
+    "fl":         ("gemini", "gemini-2.5-flash-lite"),
+    "flash-lite": ("gemini", "gemini-2.5-flash-lite"),
+    "gf":         ("gemini", "gemini-2.5-flash"),
+    "flash":      ("gemini", "gemini-2.5-flash"),
+}
+
+async def _handle_llm_switch(reply, choice, user_id, channel_id, is_dm, user_name="unknown"):
+    entry = _LLM_SWITCH_MAP.get(choice.lower())
+    if not entry:
+        await reply(
+            "Invalid choice. Use `.llm fl` (flash-lite), "
+            "`.llm gf` (flash), or `.llm o` (ollama)"
+        )
+        return
+    target_backend, target_model = entry
+    try:
+        set_backend(target_backend)
+        if target_model:
+            set_gemini_model(target_model)
+        hist_key = (user_id if is_dm else channel_id, user_id)
+        with _conv_lock:
+            _conv_history.pop(hist_key, None)
+        backend = get_backend()
+        label = f"{backend} ({get_gemini_model()})" if backend == "gemini" else backend
+        await reply(f"Switched to **{label}**")
+        print(f"[Backend] Switched to {label} by {user_name}")
+    except (ValueError, RuntimeError) as e:
+        await reply(f"Failed: {e}")
+
+async def _handle_free(reply, args_text):
+    min_dur, dates = _parse_free_args(args_text)
+    slots_by_date = {}
+    for d in dates:
+        slots_by_date[d] = await asyncio.to_thread(find_free_slots, d, min_dur)
+    result = _format_free_slots(dates, min_dur, slots_by_date)
+    await reply(result)
+
+async def _handle_demo(reply, action, user_name="unknown"):
+    global _demo_real_calendars
+
+    if action == "off" or (action == "" and _demo_real_calendars is not None):
+        if _demo_real_calendars is not None:
+            with _cal_lock:
+                CALENDARS.clear()
+                CALENDARS.extend(_demo_real_calendars)
+            _demo_real_calendars = None
+            _resize_executor()
+            _future_ctx_cache["ts"] = 0
+            _past_ctx_cache["ts"] = 0
+            await reply("Demo mode **off** — restored real calendars.")
+            print("[Demo] Disabled — restored real calendars")
+        else:
+            await reply("Demo mode is not active.")
+        return
+
+    from demo.calendars import (
+        generate_work_calendar, generate_personal_calendar,
+        generate_family_calendar, calendar_stats,
+    )
+    if _demo_real_calendars is None:
+        _demo_real_calendars = list(CALENDARS)
+
+    work_cal = generate_work_calendar()
+    personal_cal = generate_personal_calendar()
+    family_cal = generate_family_calendar()
+
+    _demo_work_url = "__demo_work__"
+    _demo_personal_url = "__demo_personal__"
+    _demo_family_url = "__demo_family__"
+    with _cal_lock:
+        _cal_cache[_demo_work_url] = (work_cal, time.time())
+        _cal_cache[_demo_personal_url] = (personal_cal, time.time())
+        _cal_cache[_demo_family_url] = (family_cal, time.time())
+        CALENDARS.clear()
+        CALENDARS.append(("Work", _demo_work_url))
+        CALENDARS.append(("Personal", _demo_personal_url))
+        CALENDARS.append(("Family", _demo_family_url))
+        _cal_labels[_demo_work_url] = "Work"
+        _cal_labels[_demo_personal_url] = "Personal"
+        _cal_labels[_demo_family_url] = "Family"
+
+    _resize_executor()
+    _future_ctx_cache["ts"] = 0
+    _past_ctx_cache["ts"] = 0
+
+    w_stats = calendar_stats(work_cal)
+    p_stats = calendar_stats(personal_cal)
+    f_stats = calendar_stats(family_cal)
+    total = w_stats['total_events'] + p_stats['total_events'] + f_stats['total_events']
+    await reply(
+        f"**Demo mode ON** — using 90-day benchmark calendars\n"
+        f"📋 Work: {w_stats['total_events']} events\n"
+        f"📋 Personal: {p_stats['total_events']} events\n"
+        f"📋 Family: {f_stats['total_events']} events\n"
+        f"📊 Total: {total} events (30 days of history + 60 days of future)\n\n"
+        f"Your real calendars are saved. Use `.demo off` to restore them."
+    )
+    print(f"[Demo] Enabled — Work: {w_stats['total_events']}, Personal: {p_stats['total_events']}, Family: {f_stats['total_events']} ({total} total)")
+
+# ── Slash commands ──
+
+@tree.command(name="help", description="Show available commands and tips")
+async def slash_help(interaction: discord.Interaction):
+    if DISCORD_ALLOWED_USERS and interaction.user.id not in DISCORD_ALLOWED_USERS:
+        await interaction.response.send_message("You are not authorized.", ephemeral=True)
+        return
+    await _handle_help(interaction.response.send_message)
+
+@tree.command(name="cal", description="List connected calendars")
+async def slash_cal(interaction: discord.Interaction):
+    if DISCORD_ALLOWED_USERS and interaction.user.id not in DISCORD_ALLOWED_USERS:
+        await interaction.response.send_message("You are not authorized.", ephemeral=True)
+        return
+    await _handle_cal(interaction.response.send_message)
+
+@tree.command(name="llm", description="Show or switch LLM backend")
+@app_commands.describe(choice="Backend: o (ollama), fl (flash-lite), gf (flash)")
+async def slash_llm(interaction: discord.Interaction, choice: str = None):
+    if DISCORD_ALLOWED_USERS and interaction.user.id not in DISCORD_ALLOWED_USERS:
+        await interaction.response.send_message("You are not authorized.", ephemeral=True)
+        return
+    if choice is None:
+        await _handle_llm_show(interaction.response.send_message)
+    else:
+        is_dm = interaction.guild is None
+        await _handle_llm_switch(
+            interaction.response.send_message, choice,
+            interaction.user.id, interaction.channel_id, is_dm,
+            str(interaction.user),
+        )
+
+@tree.command(name="free", description="Find free time slots (no LLM needed)")
+@app_commands.describe(
+    duration="Minimum gap (e.g. 30m, 1h, 2h). Default: 30m",
+    day="Day or range (today, tomorrow, wednesday, this week, next week). Default: today",
+)
+async def slash_free(interaction: discord.Interaction, duration: str = "", day: str = ""):
+    if DISCORD_ALLOWED_USERS and interaction.user.id not in DISCORD_ALLOWED_USERS:
+        await interaction.response.send_message("You are not authorized.", ephemeral=True)
+        return
+    args_text = f"{duration} {day}".strip()
+    await _handle_free(interaction.response.send_message, args_text)
+
+@tree.command(name="demo", description="Toggle demo calendars (synthetic data)")
+@app_commands.describe(action="on or off (default: toggle)")
+async def slash_demo(interaction: discord.Interaction, action: str = ""):
+    if DISCORD_ALLOWED_USERS and interaction.user.id not in DISCORD_ALLOWED_USERS:
+        await interaction.response.send_message("You are not authorized.", ephemeral=True)
+        return
+    await _handle_demo(interaction.response.send_message, action.lower(), str(interaction.user))
+
 @client.event
 async def on_ready():
-    global _scheduler_started, _ready_at
+    global _scheduler_started, _tree_synced, _ready_at
     _ready_at = datetime.now(TZ)
     print(f"Discord bot logged in as {client.user}")
     if DISCORD_ALLOWED_USERS:
@@ -906,6 +1316,13 @@ async def on_ready():
             scheduler.start()
             _scheduler_started = True
             print("Scheduler started.")
+        if not _tree_synced:
+            try:
+                await tree.sync()
+                _tree_synced = True
+                print("Slash commands synced.")
+            except Exception as e:
+                print(f"Warning: Failed to sync slash commands: {e}")
 
 @client.event
 async def on_message(message):
@@ -942,151 +1359,39 @@ async def on_message(message):
         # Remove only the matching closing quote (if present) to preserve intent
         question = '.' + (rest[:-1] if rest.endswith(q) else rest)
 
+    # .help command — show available commands and tips
+    if question.lower().startswith(".help"):
+        await _handle_help(message.reply)
+        return
+
+    # .free command — deterministic free-time finder (no LLM)
+    if question.lower().startswith(".free"):
+        await _handle_free(message.reply, question[5:].strip())
+        return
+
     # .llm command — show current LLM backend options / switch backend
     if question.lower().startswith(".llm"):
         parts = question.split(maxsplit=1)
         if len(parts) == 1:
-            # No argument: show backend info
-            current = get_backend()
-            cur_gmodel = get_gemini_model()
-            ollama_marker = " <-- **Current**" if current == "ollama" else ""
-            gemini_rows = []
-            # Approximate free-tier limits as of Apr 2026; check ai.google.dev for latest.
-            model_info = [
-                ("gemini-2.5-flash-lite", "15 RPM, ~200ms TTFT"),
-                ("gemini-2.5-flash",      "10 RPM, ~300ms TTFT"),
-            ]
-            for m, info in model_info:
-                marker = " <-- **Current**" if (current == "gemini" and cur_gmodel == m) else ""
-                gemini_rows.append(f"   • `{m}` — {info}{marker}")
-            await message.reply(
-                f"1. **Ollama** — model: `{OLLAMA_MODEL}`{ollama_marker}\n"
-                f"2. **Gemini** models:\n"
-                + "\n".join(gemini_rows) + "\n\n"
-                "Switch with: `.llm o`, `.llm fl`, `.llm gf`"
+            await _handle_llm_show(message.reply)
+        else:
+            await _handle_llm_switch(
+                message.reply, parts[1].strip(),
+                message.author.id, message.channel.id, is_dm,
+                str(message.author),
             )
-            return
-
-        choice = parts[1].strip().lower()
-        switch_map = {
-            "g":          ("gemini", None),
-            "gemini":     ("gemini", None),
-            "o":          ("ollama", None),
-            "ollama":     ("ollama", None),
-            # Legacy numeric shortcuts
-            "1":          ("ollama", None),
-            "2":          ("gemini", None),
-            # Gemini per-model shortcuts
-            "fl":         ("gemini", "gemini-2.5-flash-lite"),
-            "flash-lite": ("gemini", "gemini-2.5-flash-lite"),
-            "gf":         ("gemini", "gemini-2.5-flash"),
-            "flash":      ("gemini", "gemini-2.5-flash"),
-        }
-        entry = switch_map.get(choice)
-        if not entry:
-            await message.reply(
-                "Invalid choice. Use `.llm fl` (flash-lite), "
-                "`.llm gf` (flash), or `.llm o` (ollama)"
-            )
-            return
-
-        target_backend, target_model = entry
-        try:
-            set_backend(target_backend)
-            if target_model:
-                set_gemini_model(target_model)
-            # Clear conversation history on backend/model switch
-            hist_key = (message.author.id if is_dm else message.channel.id, message.author.id)
-            with _conv_lock:
-                _conv_history.pop(hist_key, None)
-            backend = get_backend()
-            label = f"{backend} ({get_gemini_model()})" if backend == "gemini" else backend
-            await message.reply(f"Switched to **{label}**")
-            print(f"[Backend] Switched to {label} by {message.author}")
-        except (ValueError, RuntimeError) as e:
-            await message.reply(f"Failed: {e}")
         return
 
     # .cal command — list connected calendars
     if question.lower().startswith(".cal"):
-        with _cal_lock:
-            labels = [label for label, _ in CALENDARS]
-        lines = [f"Connected calendars ({len(labels)}):"]
-        lines.extend(f"{i}. **{label}**" for i, label in enumerate(labels, start=1))
-        await message.reply("\n".join(lines))
+        await _handle_cal(message.reply)
         return
 
     # .demo command — switch to demo calendars (ignores real env calendars)
     if question.lower().startswith(".demo"):
-        global _demo_real_calendars
         parts = question.split(maxsplit=1)
         arg = parts[1].strip().lower() if len(parts) > 1 else ""
-
-        # Toggle off if already active (no arg) or explicit "off"
-        if arg == "off" or (arg == "" and _demo_real_calendars is not None):
-            # Restore real calendars
-            if _demo_real_calendars is not None:
-                with _cal_lock:
-                    CALENDARS.clear()
-                    CALENDARS.extend(_demo_real_calendars)
-                _demo_real_calendars = None
-                _resize_executor()
-                # Invalidate context caches
-                _future_ctx_cache["ts"] = 0
-                _past_ctx_cache["ts"] = 0
-                await message.reply("Demo mode **off** — restored real calendars.")
-                print("[Demo] Disabled — restored real calendars")
-            else:
-                await message.reply("Demo mode is not active.")
-            return
-
-        # Activate demo mode — use 90-day benchmark calendars from demo/
-        from demo.calendars import (
-            generate_work_calendar, generate_personal_calendar,
-            generate_family_calendar, calendar_stats,
-        )
-        if _demo_real_calendars is None:
-            _demo_real_calendars = list(CALENDARS)
-
-        work_cal = generate_work_calendar()
-        personal_cal = generate_personal_calendar()
-        family_cal = generate_family_calendar()
-
-        # Store parsed Calendar objects directly in _cal_cache with fake URLs
-        _demo_work_url = "__demo_work__"
-        _demo_personal_url = "__demo_personal__"
-        _demo_family_url = "__demo_family__"
-        with _cal_lock:
-            _cal_cache[_demo_work_url] = (work_cal, time.time())
-            _cal_cache[_demo_personal_url] = (personal_cal, time.time())
-            _cal_cache[_demo_family_url] = (family_cal, time.time())
-
-            CALENDARS.clear()
-            CALENDARS.append(("Work", _demo_work_url))
-            CALENDARS.append(("Personal", _demo_personal_url))
-            CALENDARS.append(("Family", _demo_family_url))
-            _cal_labels[_demo_work_url] = "Work"
-            _cal_labels[_demo_personal_url] = "Personal"
-            _cal_labels[_demo_family_url] = "Family"
-
-        _resize_executor()
-        # Invalidate context caches so next question uses demo data
-        _future_ctx_cache["ts"] = 0
-        _past_ctx_cache["ts"] = 0
-
-        w_stats = calendar_stats(work_cal)
-        p_stats = calendar_stats(personal_cal)
-        f_stats = calendar_stats(family_cal)
-        total = w_stats['total_events'] + p_stats['total_events'] + f_stats['total_events']
-        await message.reply(
-            f"**Demo mode ON** — using 90-day benchmark calendars\n"
-            f"📋 Work: {w_stats['total_events']} events\n"
-            f"📋 Personal: {p_stats['total_events']} events\n"
-            f"📋 Family: {f_stats['total_events']} events\n"
-            f"📊 Total: {total} events (30 days of history + 60 days of future)\n\n"
-            f"Your real calendars are saved. Use `.demo off` to restore them."
-        )
-        print(f"[Demo] Enabled — Work: {w_stats['total_events']}, Personal: {p_stats['total_events']}, Family: {f_stats['total_events']} ({total} total)")
+        await _handle_demo(message.reply, arg, str(message.author))
         return
 
     print(f"[Chat] {message.author}: {question[:80]}{'…' if len(question) > 80 else ''}")
@@ -1139,16 +1444,30 @@ async def on_message(message):
         print(f"[Chat] Error handling message from {message.author}: {e}")
         await message.reply("❌ Something went wrong processing your question. Please try again.")
 
+# ── Graceful shutdown ──
+
+def _shutdown():
+    """Clean up resources on exit."""
+    print("[Shutdown] Cleaning up...")
+    _cal_executor.shutdown(wait=False)
+
+atexit.register(_shutdown)
+
 # ── Main entry point ──
 
 async def run_scheduler_only():
     """Run just the scheduler when no Discord token is configured."""
+    loop = asyncio.get_running_loop()
     scheduler = _configure_scheduler()
     scheduler.start()
     print("Scout Report Started. Scheduler running (no Discord chat).")
-    # Keep the loop alive
-    while True:
-        await asyncio.sleep(3600)
+
+    stop = asyncio.Event()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, stop.set)
+    await stop.wait()
+    scheduler.shutdown(wait=False)
+    print("[Shutdown] Scheduler stopped.")
 
 if __name__ == "__main__":
     if DISCORD_BOT_TOKEN:
