@@ -1347,3 +1347,50 @@ class TestHandleReboot:
         assert len(replies) == 1
         assert "Rebooting" in replies[0]
         mock_execv.assert_called_once()
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 27. send_noon_brief
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+from main import send_noon_brief, _fetch_digest_events, _send_notification
+
+
+class TestSendNoonBrief:
+    """Tests for the noon brief digest function."""
+
+    @patch("main._send_notification")
+    @patch("main._fetch_digest_events")
+    def test_skips_when_no_events(self, mock_fetch, mock_notify):
+        """Noon brief should not send a notification when tomorrow has no work events."""
+        mock_fetch.return_value = []
+        send_noon_brief()
+        mock_notify.assert_not_called()
+
+    @patch("main._send_notification")
+    @patch("main._fetch_digest_events")
+    def test_sends_when_events_exist(self, mock_fetch, mock_notify):
+        """Noon brief should send a notification when tomorrow has work events."""
+        tz = ZoneInfo("America/Los_Angeles")
+        tomorrow = datetime.now(tz) + timedelta(days=1)
+        mock_fetch.return_value = [
+            Event(dt=tomorrow.replace(hour=9, minute=0), summary="Standup", all_day=False, duration_min=30),
+            Event(dt=tomorrow.replace(hour=14, minute=0), summary="Sprint Review", all_day=False, duration_min=60),
+        ]
+        send_noon_brief()
+        mock_notify.assert_called_once()
+        title = mock_notify.call_args[0][0]
+        body = mock_notify.call_args[0][1]
+        assert "Tomorrow" in title
+        assert "Standup" in body
+        assert "Sprint Review" in body
+
+    @patch("main._send_notification")
+    @patch("main._fetch_digest_events")
+    def test_uses_work_labels_filter(self, mock_fetch, mock_notify):
+        """Noon brief should filter by WORK_LABELS."""
+        mock_fetch.return_value = []
+        send_noon_brief()
+        # Verify _fetch_digest_events was called with WORK_LABELS as the label filter
+        call_args = mock_fetch.call_args
+        assert call_args[0][2] is main.WORK_LABELS or call_args[1].get("label_filter") is main.WORK_LABELS

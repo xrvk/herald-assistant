@@ -305,8 +305,14 @@ try:
 except (ValueError, IndexError) as e:
     raise RuntimeError(f"Invalid WEEKEND_SCHEDULE: {os.getenv('WEEKEND_SCHEDULE')!r} — {e}") from e
 
+# Noon brief: tomorrow's work events at midday, only notifies if events exist
+try:
+    _noon_brief = _parse_schedule(os.getenv("NOON_SCHEDULE", "off"), "sun,mon,tue,wed,thu", "12:00")
+except (ValueError, IndexError) as e:
+    raise RuntimeError(f"Invalid NOON_SCHEDULE: {os.getenv('NOON_SCHEDULE')!r} — {e}") from e
+
 # Setup Apprise (only required when scheduled digests are enabled)
-_schedules_enabled = _weeknight is not None or _weekend is not None
+_schedules_enabled = _weeknight is not None or _weekend is not None or _noon_brief is not None
 _apprise_url = os.getenv("APPRISE_URL")
 if _schedules_enabled:
     if not _apprise_url:
@@ -942,6 +948,29 @@ def send_work_update():
     except Exception as e:
         print(f"Error in weeknight digest: {e}")
 
+def send_noon_brief():
+    """Triggered at noon on days before workdays — only notifies if tomorrow has work events."""
+    try:
+        print("Noon brief: checking tomorrow's work events...")
+        now = datetime.now(TZ)
+        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0)
+        end_of_tomorrow = tomorrow.replace(hour=23, minute=59, second=59)
+
+        all_events = _fetch_digest_events(tomorrow, end_of_tomorrow, WORK_LABELS)
+        if not all_events:
+            print("Noon brief: no work events tomorrow — skipping notification.")
+            return
+
+        lines = format_events_for_notification(all_events)
+        msg = "\n".join(lines)
+
+        _send_notification(
+            f"📋 Tomorrow's Work: {tomorrow.strftime('%A, %b %d')}",
+            msg, "Noon brief",
+        )
+    except Exception as e:
+        print(f"Error in noon brief: {e}")
+
 def send_weekend_update():
     """Triggered Thursday for weekend context."""
     try:
@@ -999,6 +1028,7 @@ def _make_async(fn):
 
 _async_keep_model_alive = _make_async(_keep_model_alive)
 _async_send_work_update = _make_async(send_work_update)
+_async_send_noon_brief = _make_async(send_noon_brief)
 _async_send_weekend_update = _make_async(send_weekend_update)
 _async_cleanup_conv_history = _make_async(_cleanup_conv_history)
 
@@ -1020,6 +1050,10 @@ def _configure_scheduler():
         days, h, m = _weeknight
         scheduler.add_job(_async_send_work_update, "cron", day_of_week=days, hour=h, minute=m)
         print(f"  Weeknight digest: {days} at {h:02d}:{m:02d}")
+    if _noon_brief:
+        days, h, m = _noon_brief
+        scheduler.add_job(_async_send_noon_brief, "cron", day_of_week=days, hour=h, minute=m)
+        print(f"  Noon brief: {days} at {h:02d}:{m:02d}")
     if _weekend:
         days, h, m = _weekend
         scheduler.add_job(_async_send_weekend_update, "cron", day_of_week=days, hour=h, minute=m)
