@@ -1365,7 +1365,7 @@ async def _handle_ignore(reply, args_text, hist_chan=None, user_id=None):
         return
 
     if args.lower().startswith("remove ") or args.lower() == "remove":
-        raw = args[7:].strip()  # strip "remove "
+        raw = args[len("remove "):].strip()
         if not raw:
             await reply("Usage: `.ignore remove <event>` or `.ignore remove <event1>, <event2>`")
             return
@@ -1439,7 +1439,7 @@ async def _handle_nonblock(reply, args_text, hist_chan=None, user_id=None):
         return
 
     if args.lower().startswith("remove ") or args.lower() == "remove":
-        raw = args[7:].strip()  # strip "remove "
+        raw = args[len("remove "):].strip()
         if not raw:
             await reply("Usage: `.nonblock remove <event>` or `.nonblock remove <event1>, <event2>`")
             return
