@@ -1244,3 +1244,26 @@ class TestHandleInfoevent:
         replies, reply = _make_async_reply()
         self._run(_handle_infoevent(reply, "remove all"))
         assert "No " in replies[0]
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 26. _handle_reboot
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+from main import _handle_reboot
+
+
+class TestHandleReboot:
+    """Tests for _handle_reboot handler."""
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def test_reboot_sends_message_and_restarts(self):
+        """_handle_reboot should reply with a reboot message then re-exec the process."""
+        replies, reply = _make_async_reply()
+        with patch("os.execv") as mock_execv:
+            self._run(_handle_reboot(reply))
+        assert len(replies) == 1
+        assert "Rebooting" in replies[0]
+        mock_execv.assert_called_once()
