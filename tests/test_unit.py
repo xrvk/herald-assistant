@@ -1142,6 +1142,70 @@ class TestRemoveRuntimeFilter:
         assert runtime == []
 
 
+from main import _remove_from_filter
+
+
+class TestRemoveFromFilter:
+    """Test _remove_from_filter helper (individual removal)."""
+
+    def test_removes_existing_entry(self):
+        target = ["lunch", "standup"]
+        runtime = ["standup"]
+        removed, not_found = _remove_from_filter(target, runtime, ["standup"])
+        assert removed == ["standup"]
+        assert not_found == []
+        assert target == ["lunch"]
+        assert runtime == []
+
+    def test_removes_env_entry(self):
+        target = ["lunch", "standup"]
+        runtime = []  # lunch is env-only
+        removed, not_found = _remove_from_filter(target, runtime, ["lunch"])
+        assert removed == ["lunch"]
+        assert not_found == []
+        assert target == ["standup"]
+
+    def test_not_found_reported(self):
+        target = ["lunch"]
+        runtime = []
+        removed, not_found = _remove_from_filter(target, runtime, ["nonexistent"])
+        assert removed == []
+        assert not_found == ["nonexistent"]
+        assert target == ["lunch"]
+
+    def test_mixed_found_and_not_found(self):
+        target = ["lunch", "standup"]
+        runtime = ["standup"]
+        removed, not_found = _remove_from_filter(target, runtime, ["standup", "missing"])
+        assert removed == ["standup"]
+        assert not_found == ["missing"]
+
+    def test_normalizes_before_remove(self):
+        target = ["team standup"]
+        runtime = ["team standup"]
+        removed, not_found = _remove_from_filter(target, runtime, ["Team Standup"])
+        assert removed == ["team standup"]
+        assert not_found == []
+        assert target == []
+
+    def test_empty_names_skipped(self):
+        target = ["lunch"]
+        runtime = []
+        removed, not_found = _remove_from_filter(target, runtime, ["", "   "])
+        assert removed == []
+        assert not_found == []
+        assert target == ["lunch"]
+
+    def test_multiple_removes(self):
+        target = ["lunch", "standup", "sync"]
+        runtime = ["standup", "sync"]
+        removed, not_found = _remove_from_filter(target, runtime, ["lunch", "standup"])
+        assert set(removed) == {"lunch", "standup"}
+        assert not_found == []
+        assert target == ["sync"]
+        assert runtime == ["sync"]
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 22. _extract_events_from_reply
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1307,6 +1371,48 @@ class TestHandleIgnore:
         self._run(_handle_ignore(reply, "last", hist_chan=None, user_id=None))
         assert "No previous" in replies[0]
 
+    def test_remove_existing(self):
+        _, reply_add = _make_async_reply()
+        self._run(_handle_ignore(reply_add, "standup"))
+        assert "standup" in main.IGNORED_EVENTS
+        replies, reply = _make_async_reply()
+        self._run(_handle_ignore(reply, "remove standup"))
+        assert "standup" not in main.IGNORED_EVENTS
+        assert "Removed" in replies[0]
+        assert "standup" in replies[0]
+
+    def test_remove_env_entry(self):
+        """Can remove entries that came from env (e.g. 'lunch')."""
+        assert "lunch" in main.IGNORED_EVENTS
+        replies, reply = _make_async_reply()
+        self._run(_handle_ignore(reply, "remove lunch"))
+        assert "lunch" not in main.IGNORED_EVENTS
+        assert "Removed" in replies[0]
+
+    def test_remove_multiple(self):
+        _, reply_add = _make_async_reply()
+        self._run(_handle_ignore(reply_add, "a, b"))
+        replies, reply = _make_async_reply()
+        self._run(_handle_ignore(reply, "remove a, b"))
+        assert "a" not in main.IGNORED_EVENTS
+        assert "b" not in main.IGNORED_EVENTS
+        assert "Removed" in replies[0]
+
+    def test_remove_not_found_reported(self):
+        replies, reply = _make_async_reply()
+        self._run(_handle_ignore(reply, "remove nonexistent-event-xyz"))
+        assert "Not found" in replies[0]
+
+    def test_remove_no_args_shows_usage(self):
+        replies, reply = _make_async_reply()
+        self._run(_handle_ignore(reply, "remove"))
+        assert "Usage" in replies[0]
+
+    def test_show_list_mentions_remove(self):
+        replies, reply = _make_async_reply()
+        self._run(_handle_ignore(reply, ""))
+        assert "remove" in replies[0]
+
 
 class TestHandleNonblock:
     """Integration tests for _handle_nonblock handler logic."""
@@ -1348,6 +1454,30 @@ class TestHandleNonblock:
         self._run(_handle_nonblock(reply, "clear"))
         assert "standup" not in main.NON_BLOCKING_EVENTS
         assert "Removed" in replies[0]
+
+    def test_remove_existing(self):
+        _, reply_add = _make_async_reply()
+        self._run(_handle_nonblock(reply_add, "standup"))
+        assert "standup" in main.NON_BLOCKING_EVENTS
+        replies, reply = _make_async_reply()
+        self._run(_handle_nonblock(reply, "remove standup"))
+        assert "standup" not in main.NON_BLOCKING_EVENTS
+        assert "Removed" in replies[0]
+
+    def test_remove_not_found_reported(self):
+        replies, reply = _make_async_reply()
+        self._run(_handle_nonblock(reply, "remove nonexistent-xyz"))
+        assert "Not found" in replies[0]
+
+    def test_remove_no_args_shows_usage(self):
+        replies, reply = _make_async_reply()
+        self._run(_handle_nonblock(reply, "remove"))
+        assert "Usage" in replies[0]
+
+    def test_show_list_mentions_remove(self):
+        replies, reply = _make_async_reply()
+        self._run(_handle_nonblock(reply, ""))
+        assert "remove" in replies[0]
 
     def test_last_with_history(self):
         """._handle_nonblock last extracts from conv history reply."""
