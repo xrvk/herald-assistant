@@ -233,7 +233,7 @@ The bot is I/O-bound (HTTP calls to calendar feeds and the Gemini API), not CPU-
 
 Use this setup if you prefer a **fully local/private LLM** or don't want to use a cloud API. The bot runs on the NAS and calls Ollama on a MacBook (or any machine) over the LAN.
 
-> **Local dev users:** If you're running the bot directly on your Mac (not on a NAS), you don't need any of the network config below. Set `LLM_BACKEND=ollama` in your `.env` and Ollama runs on the same machine. You can switch to Gemini as a fallback at any time with `!switch g` (requires `GEMINI_API_KEY` set in `.env`).
+> **Local dev users:** If you're running the bot directly on your Mac (not on a NAS), you don't need any of the network config below. Set `LLM_BACKEND=ollama` in your `.env` and Ollama runs on the same machine. Add `GEMINI_API_KEY` to your `.env` and Gemini flash-lite is used automatically whenever Ollama is unreachable — no manual switching required.
 
 ### Architecture
 
@@ -311,6 +311,27 @@ From the NAS (or any machine on the LAN):
 curl http://192.168.86.86:11434/api/tags
 ```
 
+### Gemini Fallback (Optional)
+
+If your MacBook is sometimes off or asleep, you can add a `GEMINI_API_KEY` alongside `LLM_BACKEND=ollama`. When Ollama is unreachable the bot automatically falls back to **Gemini flash-lite** instead of replying with an offline error.
+
+In `docker-compose.yaml`, add your key to the LLM section:
+
+```yaml
+LLM_BACKEND: "ollama"
+OLLAMA_URL: "http://192.168.86.86:11434"
+OLLAMA_MODEL: "gemma4:e4b"
+GEMINI_API_KEY: "your-gemini-api-key-here"   # ← enables auto-fallback
+```
+
+Get a free key from [Google AI Studio](https://aistudio.google.com/app/apikey). With the key set, startup logs will confirm the fallback is configured:
+
+```
+LLM backend: Ollama (gemma4:e4b at http://192.168.86.86:11434, Gemini fallback: gemini-2.5-flash-lite)
+```
+
+Ollama is always tried first. Gemini is only used when Ollama is unreachable. `!switch g` / `!switch o` still work to override at runtime.
+
 ### Update docker-compose.yaml on the NAS
 
 Change the LLM config to point at the MacBook. In **File Station**, open `docker-compose.yaml` in Text Editor and update:
@@ -334,7 +355,8 @@ LLM backend: Ollama (gemma4:e4b at http://192.168.86.86:11434)
 | Check | How |
 |---|---|
 | LLM works | Ask "What's on my calendar tomorrow?" — should respond in 5–15s |
-| Ollama offline fallback | Stop Ollama on the Mac, send a message — bot should reply with "🔌 LLM is offline — Ollama may not be running or is unreachable." |
+| Ollama offline fallback (no Gemini key) | Stop Ollama on the Mac, send a message — bot should reply with "🔌 LLM is offline — Ollama may not be running or is unreachable." |
+| Ollama offline fallback (with Gemini key) | Stop Ollama on the Mac, send a message — bot should automatically answer via Gemini flash-lite |
 | Slow after Mac wake | First query after wake takes longer (model cold-loads ~15–20s). Subsequent queries are fast |
 
 ### Ollama Troubleshooting
