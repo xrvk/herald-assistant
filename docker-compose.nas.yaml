@@ -1,0 +1,99 @@
+# ============================================================
+# Scout Report — Synology NAS / Container Manager
+# ============================================================
+# This file is the NAS-specific deployment configuration.
+# All settings are inline — no separate .env file needed.
+#
+# SETUP:
+#   1. Fill in your values below (replace the placeholder strings)
+#   2. Rename this file to docker-compose.yaml
+#      (File Station: right-click → Rename)
+#   3. Create the project in Container Manager
+#
+# See NAS-DUAL-SETUP.md for the full step-by-step guide.
+# ============================================================
+
+services:
+  scout-report:
+    build: .
+    container_name: scout_report
+    restart: always
+    environment:
+
+      # ── Calendars (at least one required) ─────────────────────────────
+      # Any ICS URL works — iCloud (webcal://), Outlook (https://), Google (https://), etc.
+      # iCloud webcal:// URLs are automatically converted to https:// by the bot.
+      # See NAS-DUAL-SETUP.md §1 for how to get these URLs.
+      CALENDAR_1_URL: "https://your-calendar-url.ics"
+      CALENDAR_1_LABEL: "Personal"
+      # CALENDAR_2_URL: "https://your-second-calendar-url.ics"
+      # CALENDAR_2_LABEL: "Work"
+      # CALENDAR_3_URL: "https://your-third-calendar-url.ics"
+      # CALENDAR_3_LABEL: "Family"
+      # Up to CALENDAR_9_URL / CALENDAR_9_LABEL supported.
+
+      # ── Discord Bot (required for interactive chat) ────────────────────
+      # See NAS-DUAL-SETUP.md §2 to create a bot and get these values.
+      DISCORD_BOT_TOKEN: "your-discord-bot-token-here"
+      DISCORD_CHANNEL_ID: "your-channel-id-here"
+      # Restrict to specific Discord user IDs (recommended on always-on NAS).
+      # Find your ID: Discord → Settings → Advanced → Developer Mode,
+      # then right-click your name → Copy User ID.
+      # DISCORD_ALLOWED_USERS: "123456789012345678"
+
+      # ── LLM Backend ───────────────────────────────────────────────────
+      # "gemini" = cloud, recommended (free tier, no GPU needed)
+      # "ollama" = local/private (requires Ollama on a machine on your LAN)
+      #            If GEMINI_API_KEY is also set, Gemini is used automatically
+      #            when Ollama is unreachable (NAS-DUAL-SETUP.md appendix).
+      LLM_BACKEND: "gemini"
+
+      # Gemini: get a free key at https://aistudio.google.com/app/apikey
+      GEMINI_API_KEY: "your-gemini-api-key-here"
+      # GEMINI_MODEL: "gemini-2.5-flash-lite"
+
+      # Ollama (only used when LLM_BACKEND=ollama):
+      # OLLAMA_URL: "http://192.168.1.100:11434"
+      # OLLAMA_MODEL: "gemma4:e4b"
+
+      # ── Timezone ──────────────────────────────────────────────────────
+      # IANA timezone — controls digest timing and bot answers.
+      # Full list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+      TZ: "America/Los_Angeles"
+
+      # ── Notifications (optional — required for scheduled digests) ──────
+      # Discord webhook → convert to Apprise format:
+      #   https://discord.com/api/webhooks/ID/TOKEN
+      #   → discord://ID/TOKEN
+      # APPRISE_URL: "discord://webhook_id/webhook_token"
+      WEEKNIGHT_SCHEDULE: "off"
+      WEEKEND_SCHEDULE: "off"
+      # Required if WEEKNIGHT_SCHEDULE is enabled. Must match a CALENDAR_N_LABEL.
+      # WORK_LABELS: "Work"
+
+      # ── Optional Tuning ────────────────────────────────────────────────
+      # CONTEXT_DAYS: "7"           # days of future events the LLM can see
+      # HISTORY_DAYS: "10"          # days of past events (0 = off)
+      # CACHE_TTL: "3600"           # calendar fetch cache in seconds (1h)
+      # IGNORED_EVENTS: ""          # hide events from LLM/digests (comma-separated)
+      # CONV_HISTORY_TURNS: "3"     # Q&A pairs kept per user for follow-ups
+      # SYSTEM_PROMPT: ""           # override the LLM personality
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

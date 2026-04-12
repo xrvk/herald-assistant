@@ -436,6 +436,42 @@ class TestBackendLogic:
         assert _estimate_tokens("") == 0
         assert _estimate_tokens("x" * 100) == 25
 
+    def test_ollama_fallback_to_gemini_when_key_set(self):
+        """When Ollama is unreachable and GEMINI_API_KEY is set, ask_llm falls back to Gemini."""
+        import requests as req
+        import main
+
+        with patch.object(req, "post", side_effect=req.exceptions.ConnectionError("refused")), \
+             patch.object(main, "_gemini_api_key", "fake-key"), \
+             patch.object(main, "ask_gemini", return_value="fallback answer") as mock_gemini:
+            result = main.ask_llm("what's tomorrow?", "some context")
+        mock_gemini.assert_called_once_with("what's tomorrow?", "some context", history=None)
+        assert result == "fallback answer"
+
+    def test_ollama_offline_without_gemini_key(self):
+        """When Ollama is unreachable and no GEMINI_API_KEY, ask_llm returns offline message."""
+        import requests as req
+        import main
+
+        with patch.object(req, "post", side_effect=req.exceptions.ConnectionError("refused")), \
+             patch.object(main, "_gemini_api_key", ""):
+            result = main.ask_llm("what's tomorrow?", "some context")
+        assert result == "🔌 LLM is offline — Ollama may not be running or is unreachable."
+
+    def test_ollama_fallback_passes_history(self):
+        """Fallback to Gemini forwards the conversation history."""
+        import requests as req
+        import main
+
+        history = [("prev q", "prev a")]
+        with patch.object(req, "post", side_effect=req.exceptions.ConnectionError("refused")), \
+             patch.object(main, "_gemini_api_key", "fake-key"), \
+             patch.object(main, "ask_gemini", return_value="gemini reply") as mock_gemini:
+            result = main.ask_llm("follow-up", "ctx", history=history)
+        mock_gemini.assert_called_once_with("follow-up", "ctx", history=history)
+        assert result == "gemini reply"
+
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  7. Schedule Parsing
