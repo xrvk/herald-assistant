@@ -1173,7 +1173,7 @@ class TestExtractEventsFromReply:
     def test_strips_bold_markdown(self):
         text = "• **Team Standup** (30m)"
         events = _extract_events_from_reply(text)
-        assert any("Team Standup" in e or "team standup" in e.lower() for e in events)
+        assert "Team Standup" in events
 
     def test_dash_bullet(self):
         text = "- 2:00 PM: Sprint Review (60m)"
