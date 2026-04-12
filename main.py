@@ -196,7 +196,8 @@ def _extract_events_from_reply(text: str) -> list[str]:
             continue
         # Strip bullet and bold markdown
         content = re.sub(r'\*+', '', line.lstrip('•-* ')).strip()
-        # Remove leading time prefix (e.g. "10:00 AM: " or "All Day: ")
+        # Match optional "All Day: " or time prefix (e.g. "10:00 AM: "), capture event name,
+        # then strip optional duration suffix like "(30m)" or "(1h 30m)"
         m = re.match(
             r'(?:All\s+Day:\s*)?(?:\d{1,2}:\d{2}\s*(?:AM|PM)\s*[:\-\u2014]+\s*)?(.+?)(?:\s+\(\d+[hm](?:\s+\d+[hm])?\))?\s*$',
             content, re.IGNORECASE,
@@ -210,11 +211,11 @@ def _extract_events_from_reply(text: str) -> list[str]:
 
 # Natural-language patterns for "add X to ignore/non-blocking list"
 _NL_IGNORE_RE = re.compile(
-    r"^(?:please\s+)?add\s+[\"']?(.+?)[\"']?\s+to\s+(?:the\s+)?(?:ignore[d]?|ignored\s+events?)\s*(?:list|filter)?\s*$",
+    r"^(?:please\s+)?add\s+[\"']?(.+?)[\"']?\s+to\s+(?:the\s+)?ignore[d]?(?:\s+events?)?\s*(?:list|filter)?\s*$",
     re.IGNORECASE,
 )
 _NL_NONBLOCK_RE = re.compile(
-    r"^(?:please\s+)?(?:add|mark)\s+[\"']?(.+?)[\"']?\s+(?:as\s+)?(?:to\s+(?:the\s+)?)?non.?block(?:ing)?\s*(?:list)?\s*$",
+    r"^(?:please\s+)?(?:add|mark)\s+[\"']?(.+?)[\"']?\s+(?:(?:as|to(?:\s+the)?)\s+)?non.?block(?:ing)?\s*(?:list)?\s*$",
     re.IGNORECASE,
 )
 
@@ -1614,7 +1615,6 @@ async def on_message(message):
         hist_chan = message.author.id if is_dm else message.channel.id
         await _handle_nonblock(message.reply, _nl_nonblock_m.group(1).strip(), hist_chan, message.author.id)
         return
-
 
     # Use author ID as channel key for DMs (DM channel IDs can change)
     hist_chan = message.author.id if is_dm else message.channel.id
