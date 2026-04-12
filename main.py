@@ -93,6 +93,13 @@ if DISCORD_CHANNEL_ID and not DISCORD_CHANNEL_ID.strip().isdigit():
 if DISCORD_CHANNEL_ID:
     DISCORD_CHANNEL_ID = DISCORD_CHANNEL_ID.strip()
 
+# Optional guild ID for instant slash-command sync (vs ~1hr global propagation).
+# Set DISCORD_GUILD_ID to your server/guild ID when developing locally.
+_guild_id_raw = os.getenv("DISCORD_GUILD_ID") or None
+if _guild_id_raw and not _guild_id_raw.strip().isdigit():
+    raise RuntimeError(f"DISCORD_GUILD_ID must be a numeric ID, got: {_guild_id_raw!r}")
+DISCORD_GUILD_ID: int | None = int(_guild_id_raw.strip()) if _guild_id_raw else None
+
 # Discord user allowlist (comma-separated user IDs). If set, only these users can interact.
 _allowed_raw = os.getenv("DISCORD_ALLOWED_USERS", "")
 try:
@@ -381,7 +388,12 @@ SYSTEM_PROMPT += (
 # ── Startup summary ──
 print("─" * 40)
 if DISCORD_BOT_TOKEN:
-    print(f"  Discord bot: enabled (channel {DISCORD_CHANNEL_ID})" if DISCORD_CHANNEL_ID else "  Discord bot: enabled (DMs only)")
+    _discord_line = f"  Discord bot: enabled (channel {DISCORD_CHANNEL_ID})" if DISCORD_CHANNEL_ID else "  Discord bot: enabled (DMs only)"
+    if DISCORD_GUILD_ID:
+        _discord_line += f" | slash sync: guild {DISCORD_GUILD_ID} (instant)"
+    else:
+        _discord_line += " | slash sync: global (~1hr)"
+    print(_discord_line)
 else:
     print("  Discord bot: disabled (no DISCORD_BOT_TOKEN)")
 if _schedules_enabled:
@@ -1388,9 +1400,17 @@ async def on_ready():
             print("Scheduler started.")
         if not _tree_synced:
             try:
-                await tree.sync()
+                if DISCORD_GUILD_ID:
+                    guild_obj = discord.Object(id=DISCORD_GUILD_ID)
+                    # copy_global_to makes globally-registered commands visible at
+                    # guild scope; sync(guild=...) then pushes them instantly.
+                    tree.copy_global_to(guild=guild_obj)
+                    await tree.sync(guild=guild_obj)
+                    print(f"Slash commands synced to guild {DISCORD_GUILD_ID} (instant).")
+                else:
+                    await tree.sync()
+                    print("Slash commands synced globally (may take ~1hr to propagate).")
                 _tree_synced = True
-                print("Slash commands synced.")
             except Exception as e:
                 print(f"Warning: Failed to sync slash commands: {e}")
 

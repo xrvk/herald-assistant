@@ -79,6 +79,10 @@ Each calendar gets its own label, which the LLM uses to distinguish events by so
    - Right-click the channel you want the bot to listen in → **Copy Channel ID**
 5. **Get user IDs** (optional — for `DISCORD_ALLOWED_USERS`):
    - With Developer Mode on, right-click a user → **Copy User ID**
+6. **Get the server/guild ID** (optional — for `DISCORD_GUILD_ID`, recommended for local testing):
+   - With Developer Mode on, right-click the server icon → **Copy Server ID**
+   - Set `DISCORD_GUILD_ID` in your `.env` to get instant slash-command sync on bot startup
+   - Without this, slash commands sync globally and take up to **1 hour** to appear in Discord
 
 > **Important:** After adding the bot to your server, make sure it has permissions in your target channel. Right-click the channel → Edit Channel → Permissions → add the bot role → enable View Channel, Send Messages, and Read Message History.
 
