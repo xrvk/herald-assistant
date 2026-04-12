@@ -16,23 +16,12 @@ Per-user/channel in-memory history (`_conv_history` dict of deques). `_get_histo
 
 ## Bot Process Management
 
-Use this exact local reboot sequence to avoid duplicate Discord replies:
+Use `dev.sh` for local development — stops existing instances (local + Docker) in parallel, then starts fresh:
 
 ```bash
-# stop local + docker instances
-pkill -9 -f "python3 main.py" 2>/dev/null; pkill -9 -f "Python main.py" 2>/dev/null; sleep 1
-docker stop scout_report 2>/dev/null || true
-docker stop context_bot 2>/dev/null || true  # legacy container name
-
-# start local bot (override Docker-specific OLLAMA_URL from .env)
-set -a && source .env && set +a && export OLLAMA_URL=http://localhost:11434 && .venv/bin/python3 main.py
-```
-
-Verify after start:
-
-```bash
-ps aux | grep "[p]ython.*main.py"
-docker ps --format '{{.Names}}' | egrep '^(scout_report|context_bot)$' || true
+./dev.sh            # stop + start
+./dev.sh --watch    # stop + start + auto-restart on main.py changes
+./dev.sh --stop     # stop only
 ```
 
 Healthy startup logs must include:
