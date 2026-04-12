@@ -86,12 +86,8 @@ from main import (
     get_backend,
     set_backend,
     SYSTEM_PROMPT,
-    _parse_free_args,
-    find_free_slots,
-    _format_free_slots,
     _HELP_TEXT,
     _LLM_SWITCH_MAP,
-    FREE_WORK_HOURS,
 )
 
 
@@ -746,200 +742,6 @@ class TestDemoCalendars:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 14. Free-Time Finder — Argument Parsing
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-class TestParseFreeArgs:
-    """Verify _parse_free_args parses duration and day ranges correctly."""
-
-    def test_empty_defaults_to_30m_today(self):
-        min_dur, dates = _parse_free_args("")
-        assert min_dur == 30
-        assert len(dates) == 1
-        assert dates[0] == datetime.now(ZoneInfo("America/Los_Angeles")).date()
-
-    def test_duration_hours(self):
-        min_dur, dates = _parse_free_args("2h")
-        assert min_dur == 120
-        assert len(dates) == 1  # defaults to today
-
-    def test_duration_minutes(self):
-        min_dur, dates = _parse_free_args("45m")
-        assert min_dur == 45
-
-    def test_duration_with_day(self):
-        min_dur, dates = _parse_free_args("1h tomorrow")
-        assert min_dur == 60
-        today = datetime.now(ZoneInfo("America/Los_Angeles")).date()
-        assert dates[0] == today + timedelta(days=1)
-
-    def test_tomorrow_no_duration(self):
-        min_dur, dates = _parse_free_args("tomorrow")
-        assert min_dur == 30
-        today = datetime.now(ZoneInfo("America/Los_Angeles")).date()
-        assert dates[0] == today + timedelta(days=1)
-
-    def test_day_name(self):
-        min_dur, dates = _parse_free_args("monday")
-        assert min_dur == 30
-        assert dates[0].weekday() == 0  # Monday
-
-    def test_this_week_returns_multiple_days(self):
-        min_dur, dates = _parse_free_args("this week")
-        assert min_dur == 30
-        assert len(dates) >= 1
-        assert len(dates) <= 7
-
-    def test_next_week_returns_five_days(self):
-        min_dur, dates = _parse_free_args("next week")
-        assert min_dur == 30
-        assert len(dates) == 5
-        # All should be Mon-Fri
-        for d in dates:
-            assert d.weekday() < 5
-
-    def test_hr_unit(self):
-        min_dur, _ = _parse_free_args("2hr")
-        assert min_dur == 120
-
-    def test_hours_unit(self):
-        min_dur, _ = _parse_free_args("3hours")
-        assert min_dur == 180
-
-    def test_min_unit(self):
-        min_dur, _ = _parse_free_args("90min")
-        assert min_dur == 90
-
-    def test_unknown_day_defaults_to_today(self):
-        min_dur, dates = _parse_free_args("blahblah")
-        assert len(dates) == 1  # falls back to today
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 15. Free-Time Finder — Slot Calculation
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-class TestFindFreeSlots:
-    """Verify find_free_slots computes gaps correctly."""
-
-    def test_empty_day_returns_full_range(self):
-        """Day with no events returns one big free slot."""
-        tomorrow = (datetime.now(ZoneInfo("America/Los_Angeles")) + timedelta(days=1)).date()
-        with patch("main._fetch_all_calendars", return_value=[]):
-            slots = find_free_slots(tomorrow, min_duration_min=30, work_hours=(9, 17))
-        assert len(slots) == 1
-        start, end, dur = slots[0]
-        assert dur == 480  # 8 hours
-
-    def test_single_event_creates_two_gaps(self):
-        """A single mid-day event creates gaps before and after."""
-        tz = ZoneInfo("America/Los_Angeles")
-        tomorrow = (datetime.now(tz) + timedelta(days=1)).date()
-        event = Event(
-            dt=datetime.combine(tomorrow, datetime.min.time()).replace(hour=12, tzinfo=tz),
-            summary="Meeting",
-            duration_min=60,
-            all_day=False,
-            normalized_summary="meeting",
-        )
-        fake_cal = MagicMock()
-        with patch("main._fetch_all_calendars", return_value=[("Work", fake_cal)]):
-            with patch("main.get_upcoming_events", return_value=[event]):
-                slots = find_free_slots(tomorrow, min_duration_min=30, work_hours=(9, 17))
-        assert len(slots) == 2
-        # First gap: 9am-12pm = 180 min
-        assert slots[0][2] == 180
-        # Second gap: 1pm-5pm = 240 min
-        assert slots[1][2] == 240
-
-    def test_all_day_events_excluded(self):
-        """All-day events should not block time."""
-        tz = ZoneInfo("America/Los_Angeles")
-        tomorrow = (datetime.now(tz) + timedelta(days=1)).date()
-        event = Event(
-            dt=datetime.combine(tomorrow, datetime.min.time()).replace(tzinfo=tz),
-            summary="Birthday",
-            duration_min=None,
-            all_day=True,
-            normalized_summary="birthday",
-        )
-        fake_cal = MagicMock()
-        with patch("main._fetch_all_calendars", return_value=[("Personal", fake_cal)]):
-            with patch("main.get_upcoming_events", return_value=[event]):
-                slots = find_free_slots(tomorrow, min_duration_min=30, work_hours=(9, 17))
-        assert len(slots) == 1
-        assert slots[0][2] == 480  # full day free
-
-    def test_overlapping_events_merged(self):
-        """Overlapping events should be merged before gap calculation."""
-        tz = ZoneInfo("America/Los_Angeles")
-        tomorrow = (datetime.now(tz) + timedelta(days=1)).date()
-        e1 = Event(
-            dt=datetime.combine(tomorrow, datetime.min.time()).replace(hour=10, tzinfo=tz),
-            summary="Meeting 1", duration_min=90, all_day=False, normalized_summary="meeting 1",
-        )
-        e2 = Event(
-            dt=datetime.combine(tomorrow, datetime.min.time()).replace(hour=11, tzinfo=tz),
-            summary="Meeting 2", duration_min=60, all_day=False, normalized_summary="meeting 2",
-        )
-        fake_cal = MagicMock()
-        with patch("main._fetch_all_calendars", return_value=[("Work", fake_cal)]):
-            with patch("main.get_upcoming_events", return_value=[e1, e2]):
-                slots = find_free_slots(tomorrow, min_duration_min=30, work_hours=(9, 17))
-        # e1: 10:00-11:30, e2: 11:00-12:00 → merged: 10:00-12:00
-        # gaps: 9-10 (60m), 12-17 (300m)
-        assert len(slots) == 2
-        assert slots[0][2] == 60
-        assert slots[1][2] == 300
-
-    def test_duration_filter(self):
-        """Slots smaller than min_duration_min are excluded."""
-        tz = ZoneInfo("America/Los_Angeles")
-        tomorrow = (datetime.now(tz) + timedelta(days=1)).date()
-        # Event from 9:15 to 17:00 — leaves only a 15-min gap at start
-        event = Event(
-            dt=datetime.combine(tomorrow, datetime.min.time()).replace(hour=9, minute=15, tzinfo=tz),
-            summary="Long meeting", duration_min=465, all_day=False, normalized_summary="long meeting",
-        )
-        fake_cal = MagicMock()
-        with patch("main._fetch_all_calendars", return_value=[("Work", fake_cal)]):
-            with patch("main.get_upcoming_events", return_value=[event]):
-                slots = find_free_slots(tomorrow, min_duration_min=30, work_hours=(9, 17))
-        assert len(slots) == 0  # 15 min gap is below threshold
-
-    def test_custom_work_hours(self):
-        """Custom work hours are respected."""
-        tomorrow = (datetime.now(ZoneInfo("America/Los_Angeles")) + timedelta(days=1)).date()
-        with patch("main._fetch_all_calendars", return_value=[]):
-            slots = find_free_slots(tomorrow, min_duration_min=30, work_hours=(10, 14))
-        assert len(slots) == 1
-        assert slots[0][2] == 240  # 4 hours
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 16. Free-Time Finder — Formatting
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-class TestFormatFreeSlots:
-    """Verify _format_free_slots output."""
-
-    def test_no_slots(self):
-        d = date(2026, 4, 15)
-        result = _format_free_slots([d], 60, {d: []})
-        assert "No free slots" in result
-
-    def test_single_day_slots(self):
-        tz = ZoneInfo("America/Los_Angeles")
-        d = date(2026, 4, 15)
-        start = datetime(2026, 4, 15, 9, 0, tzinfo=tz)
-        end = datetime(2026, 4, 15, 12, 0, tzinfo=tz)
-        result = _format_free_slots([d], 30, {d: [(start, end, 180)]})
-        assert "09:00 AM" in result
-        assert "12:00 PM" in result
-        assert "(3h)" in result
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 17. Fetch Events — Retry Logic
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -1016,7 +818,7 @@ class TestHelpText:
     """Verify help text contains all command names."""
 
     def test_contains_all_commands(self):
-        for cmd in [".help", ".cal", ".llm", ".free", ".demo"]:
+        for cmd in [".help", ".cal", ".llm", ".ignore", ".infoevent", ".demo"]:
             assert cmd in _HELP_TEXT, f"Missing command {cmd} in help text"
 
     def test_contains_example_questions(self):
@@ -1050,30 +852,15 @@ class TestMaxOutputTokens:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 20. FREE_WORK_HOURS config
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-class TestFreeWorkHours:
-    """Verify FREE_WORK_HOURS default parsing."""
-
-    def test_default_value(self):
-        assert FREE_WORK_HOURS == (8, 17)
-
-    def test_is_tuple(self):
-        assert isinstance(FREE_WORK_HOURS, tuple)
-        assert len(FREE_WORK_HOURS) == 2
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 21. Runtime filter helpers (_add_to_filter, _remove_runtime_filter)
+# 21. Filter helpers (_add_to_filter, _remove_all_filter)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 from main import (
     _add_to_filter,
-    _remove_runtime_filter,
+    _remove_all_filter,
     _extract_events_from_reply,
     _NL_IGNORE_RE,
-    _NL_NONBLOCK_RE,
+    _NL_INFOEVENT_RE,
 )
 
 
@@ -1082,66 +869,54 @@ class TestAddToFilter:
 
     def test_adds_normalized_names(self):
         target = []
-        runtime = []
-        added = _add_to_filter(target, runtime, ["Team Standup", "Weekly 1:1"])
+        added = _add_to_filter(target, ["Team Standup", "Weekly 1:1"])
         assert added == ["team standup", "weekly 11"]
         assert target == ["team standup", "weekly 11"]
-        assert runtime == ["team standup", "weekly 11"]
 
     def test_skips_duplicates(self):
         target = ["lunch"]
-        runtime = []
-        added = _add_to_filter(target, runtime, ["lunch", "Lunch"])
+        added = _add_to_filter(target, ["lunch", "Lunch"])
         assert added == []
         assert target == ["lunch"]
 
     def test_skips_empty_names(self):
         target = []
-        runtime = []
-        added = _add_to_filter(target, runtime, ["", "   ", "standup"])
+        added = _add_to_filter(target, ["", "   ", "standup"])
         assert added == ["standup"]
 
     def test_multiple_adds_accumulate(self):
         target = []
-        runtime = []
-        _add_to_filter(target, runtime, ["standup"])
-        _add_to_filter(target, runtime, ["lunch"])
+        _add_to_filter(target, ["standup"])
+        _add_to_filter(target, ["lunch"])
         assert target == ["standup", "lunch"]
-        assert runtime == ["standup", "lunch"]
 
-    def test_does_not_duplicate_existing_env_entry(self):
-        target = ["lunch"]  # existing from env
-        runtime = []
-        added = _add_to_filter(target, runtime, ["Lunch"])
+    def test_does_not_duplicate_existing_entry(self):
+        target = ["lunch"]
+        added = _add_to_filter(target, ["Lunch"])
         assert added == []
         assert target == ["lunch"]
 
 
-class TestRemoveRuntimeFilter:
-    """Test _remove_runtime_filter helper."""
+class TestRemoveAllFilter:
+    """Test _remove_all_filter helper."""
 
-    def test_removes_runtime_entries(self):
+    def test_removes_all_entries(self):
         target = ["lunch", "standup", "canceled"]
-        runtime = ["standup"]
-        removed = _remove_runtime_filter(target, runtime)
-        assert removed == ["standup"]
-        assert target == ["lunch", "canceled"]
-        assert runtime == []
+        removed = _remove_all_filter(target)
+        assert set(removed) == {"lunch", "standup", "canceled"}
+        assert target == []
 
-    def test_empty_runtime_returns_empty(self):
-        target = ["lunch"]
-        runtime = []
-        removed = _remove_runtime_filter(target, runtime)
+    def test_empty_list_returns_empty(self):
+        target = []
+        removed = _remove_all_filter(target)
         assert removed == []
-        assert target == ["lunch"]
+        assert target == []
 
-    def test_clears_all_runtime_entries(self):
-        target = ["env-entry", "rt1", "rt2"]
-        runtime = ["rt1", "rt2"]
-        removed = _remove_runtime_filter(target, runtime)
-        assert set(removed) == {"rt1", "rt2"}
-        assert target == ["env-entry"]
-        assert runtime == []
+    def test_clears_all_entries(self):
+        target = ["entry1", "entry2", "entry3"]
+        removed = _remove_all_filter(target)
+        assert set(removed) == {"entry1", "entry2", "entry3"}
+        assert target == []
 
 
 from main import _remove_from_filter
@@ -1152,60 +927,51 @@ class TestRemoveFromFilter:
 
     def test_removes_existing_entry(self):
         target = ["lunch", "standup"]
-        runtime = ["standup"]
-        removed, not_found = _remove_from_filter(target, runtime, ["standup"])
+        removed, not_found = _remove_from_filter(target, ["standup"])
         assert removed == ["standup"]
         assert not_found == []
         assert target == ["lunch"]
-        assert runtime == []
 
-    def test_removes_env_entry(self):
+    def test_removes_any_entry(self):
         target = ["lunch", "standup"]
-        runtime = []  # lunch is env-only
-        removed, not_found = _remove_from_filter(target, runtime, ["lunch"])
+        removed, not_found = _remove_from_filter(target, ["lunch"])
         assert removed == ["lunch"]
         assert not_found == []
         assert target == ["standup"]
 
     def test_not_found_reported(self):
         target = ["lunch"]
-        runtime = []
-        removed, not_found = _remove_from_filter(target, runtime, ["nonexistent"])
+        removed, not_found = _remove_from_filter(target, ["nonexistent"])
         assert removed == []
         assert not_found == ["nonexistent"]
         assert target == ["lunch"]
 
     def test_mixed_found_and_not_found(self):
         target = ["lunch", "standup"]
-        runtime = ["standup"]
-        removed, not_found = _remove_from_filter(target, runtime, ["standup", "missing"])
+        removed, not_found = _remove_from_filter(target, ["standup", "missing"])
         assert removed == ["standup"]
         assert not_found == ["missing"]
 
     def test_normalizes_before_remove(self):
         target = ["team standup"]
-        runtime = ["team standup"]
-        removed, not_found = _remove_from_filter(target, runtime, ["Team Standup"])
+        removed, not_found = _remove_from_filter(target, ["Team Standup"])
         assert removed == ["team standup"]
         assert not_found == []
         assert target == []
 
     def test_empty_names_skipped(self):
         target = ["lunch"]
-        runtime = []
-        removed, not_found = _remove_from_filter(target, runtime, ["", "   "])
+        removed, not_found = _remove_from_filter(target, ["", "   "])
         assert removed == []
         assert not_found == []
         assert target == ["lunch"]
 
     def test_multiple_removes(self):
         target = ["lunch", "standup", "sync"]
-        runtime = ["standup", "sync"]
-        removed, not_found = _remove_from_filter(target, runtime, ["lunch", "standup"])
+        removed, not_found = _remove_from_filter(target, ["lunch", "standup"])
         assert set(removed) == {"lunch", "standup"}
         assert not_found == []
         assert target == ["sync"]
-        assert runtime == ["sync"]
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1257,7 +1023,7 @@ class TestExtractEventsFromReply:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 class TestNLPatterns:
-    """Test _NL_IGNORE_RE and _NL_NONBLOCK_RE patterns."""
+    """Test _NL_IGNORE_RE and _NL_INFOEVENT_RE patterns."""
 
     def test_ignore_add_basic(self):
         m = _NL_IGNORE_RE.match("add team standup to ignore list")
@@ -1280,21 +1046,21 @@ class TestNLPatterns:
         assert _NL_IGNORE_RE.match("ignore everything next week") is None
         assert _NL_IGNORE_RE.match("what's on my calendar") is None
 
-    def test_nonblock_mark_as(self):
-        m = _NL_NONBLOCK_RE.match("mark standup as non-blocking")
+    def test_infoevent_mark_as(self):
+        m = _NL_INFOEVENT_RE.match("mark standup as info event")
         assert m is not None
         assert "standup" in m.group(1).lower()
 
-    def test_nonblock_add_to(self):
-        m = _NL_NONBLOCK_RE.match("add lunch to non-blocking")
+    def test_infoevent_add_to(self):
+        m = _NL_INFOEVENT_RE.match("add lunch to info events")
         assert m is not None
 
-    def test_nonblock_mark_nonblocking(self):
-        m = _NL_NONBLOCK_RE.match("mark dog walker as nonblocking")
+    def test_infoevent_mark_infoonly(self):
+        m = _NL_INFOEVENT_RE.match("mark dog walker as info-only")
         assert m is not None
 
-    def test_nonblock_no_match_vague(self):
-        assert _NL_NONBLOCK_RE.match("is this meeting non-blocking?") is None
+    def test_infoevent_no_match_vague(self):
+        assert _NL_INFOEVENT_RE.match("is this meeting informational?") is None
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1302,7 +1068,7 @@ class TestNLPatterns:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 import asyncio
-from main import _handle_ignore, _handle_nonblock
+from main import _handle_ignore, _handle_infoevent
 
 
 def _make_async_reply():
@@ -1317,13 +1083,11 @@ class TestHandleIgnore:
     """Integration tests for _handle_ignore handler logic."""
 
     def setup_method(self):
-        """Save and restore IGNORED_EVENTS / _runtime_ignored between tests."""
+        """Save and restore IGNORED_EVENTS between tests."""
         self._orig_ignored = list(main.IGNORED_EVENTS)
-        self._orig_runtime = list(main._runtime_ignored)
 
     def teardown_method(self):
         main.IGNORED_EVENTS[:] = self._orig_ignored
-        main._runtime_ignored[:] = self._orig_runtime
 
     def _run(self, coro):
         return asyncio.run(coro)
@@ -1351,27 +1115,23 @@ class TestHandleIgnore:
 
     def test_add_duplicate_skipped(self):
         replies, reply = _make_async_reply()
-        self._run(_handle_ignore(reply, "lunch"))  # already in IGNORED_EVENTS from env
+        self._run(_handle_ignore(reply, "lunch"))  # already in IGNORED_EVENTS
         assert "already" in replies[0]
 
-    def test_clear_removes_runtime(self):
+    def test_remove_all_clears_list(self):
         _, reply_discard = _make_async_reply()
         self._run(_handle_ignore(reply_discard, "team meeting"))
         assert "team meeting" in main.IGNORED_EVENTS
         replies, reply = _make_async_reply()
-        self._run(_handle_ignore(reply, "clear"))
+        self._run(_handle_ignore(reply, "remove all"))
         assert "team meeting" not in main.IGNORED_EVENTS
         assert "Removed" in replies[0]
 
-    def test_clear_when_empty(self):
+    def test_remove_all_when_empty(self):
+        main.IGNORED_EVENTS[:] = []
         replies, reply = _make_async_reply()
-        self._run(_handle_ignore(reply, "clear"))
-        assert "No runtime" in replies[0]
-
-    def test_last_no_history(self):
-        replies, reply = _make_async_reply()
-        self._run(_handle_ignore(reply, "last", hist_chan=None, user_id=None))
-        assert "No previous" in replies[0]
+        self._run(_handle_ignore(reply, "remove all"))
+        assert "No " in replies[0]
 
     def test_remove_existing(self):
         _, reply_add = _make_async_reply()
@@ -1383,8 +1143,8 @@ class TestHandleIgnore:
         assert "Removed" in replies[0]
         assert "standup" in replies[0]
 
-    def test_remove_env_entry(self):
-        """Can remove entries that came from env (e.g. 'lunch')."""
+    def test_remove_entry(self):
+        """Can remove entries loaded from filters.json (e.g. 'lunch')."""
         assert "lunch" in main.IGNORED_EVENTS
         replies, reply = _make_async_reply()
         self._run(_handle_ignore(reply, "remove lunch"))
@@ -1416,81 +1176,71 @@ class TestHandleIgnore:
         assert "remove" in replies[0]
 
 
-class TestHandleNonblock:
-    """Integration tests for _handle_nonblock handler logic."""
+class TestHandleInfoevent:
+    """Integration tests for _handle_infoevent handler logic."""
 
     def setup_method(self):
-        self._orig_nb = list(main.NON_BLOCKING_EVENTS)
-        self._orig_runtime_nb = list(main._runtime_nonblocking)
+        self._orig_ie = list(main.INFO_EVENTS)
 
     def teardown_method(self):
-        main.NON_BLOCKING_EVENTS[:] = self._orig_nb
-        main._runtime_nonblocking[:] = self._orig_runtime_nb
+        main.INFO_EVENTS[:] = self._orig_ie
 
     def _run(self, coro):
         return asyncio.run(coro)
 
     def test_show_list(self):
         replies, reply = _make_async_reply()
-        self._run(_handle_nonblock(reply, ""))
-        assert "Non-blocking list" in replies[0]
+        self._run(_handle_infoevent(reply, ""))
+        assert "Info-event list" in replies[0]
 
     def test_add_single(self):
         replies, reply = _make_async_reply()
-        initial = len(main.NON_BLOCKING_EVENTS)
-        self._run(_handle_nonblock(reply, "standup"))
-        assert len(main.NON_BLOCKING_EVENTS) == initial + 1
-        assert "standup" in main.NON_BLOCKING_EVENTS
+        initial = len(main.INFO_EVENTS)
+        self._run(_handle_infoevent(reply, "standup"))
+        assert len(main.INFO_EVENTS) == initial + 1
+        assert "standup" in main.INFO_EVENTS
         assert "Added" in replies[0]
 
     def test_add_multiple(self):
         replies, reply = _make_async_reply()
-        initial = len(main.NON_BLOCKING_EVENTS)
-        self._run(_handle_nonblock(reply, "standup, dog walker"))
-        assert len(main.NON_BLOCKING_EVENTS) == initial + 2
+        initial = len(main.INFO_EVENTS)
+        self._run(_handle_infoevent(reply, "standup, dog walker"))
+        assert len(main.INFO_EVENTS) == initial + 2
 
-    def test_clear(self):
+    def test_remove_all(self):
         _, reply_discard = _make_async_reply()
-        self._run(_handle_nonblock(reply_discard, "standup"))
+        self._run(_handle_infoevent(reply_discard, "standup"))
         replies, reply = _make_async_reply()
-        self._run(_handle_nonblock(reply, "clear"))
-        assert "standup" not in main.NON_BLOCKING_EVENTS
+        self._run(_handle_infoevent(reply, "remove all"))
+        assert "standup" not in main.INFO_EVENTS
         assert "Removed" in replies[0]
 
     def test_remove_existing(self):
         _, reply_add = _make_async_reply()
-        self._run(_handle_nonblock(reply_add, "standup"))
-        assert "standup" in main.NON_BLOCKING_EVENTS
+        self._run(_handle_infoevent(reply_add, "standup"))
+        assert "standup" in main.INFO_EVENTS
         replies, reply = _make_async_reply()
-        self._run(_handle_nonblock(reply, "remove standup"))
-        assert "standup" not in main.NON_BLOCKING_EVENTS
+        self._run(_handle_infoevent(reply, "remove standup"))
+        assert "standup" not in main.INFO_EVENTS
         assert "Removed" in replies[0]
 
     def test_remove_not_found_reported(self):
         replies, reply = _make_async_reply()
-        self._run(_handle_nonblock(reply, "remove nonexistent-xyz"))
+        self._run(_handle_infoevent(reply, "remove nonexistent-xyz"))
         assert "Not found" in replies[0]
 
     def test_remove_no_args_shows_usage(self):
         replies, reply = _make_async_reply()
-        self._run(_handle_nonblock(reply, "remove"))
+        self._run(_handle_infoevent(reply, "remove"))
         assert "Usage" in replies[0]
 
     def test_show_list_mentions_remove(self):
         replies, reply = _make_async_reply()
-        self._run(_handle_nonblock(reply, ""))
+        self._run(_handle_infoevent(reply, ""))
         assert "remove" in replies[0]
 
-    def test_last_with_history(self):
-        """._handle_nonblock last extracts from conv history reply."""
-        # Seed fake conversation history
-        hist_chan, user_id = 999, 777
-        main._store_exchange(hist_chan, user_id, "what's tomorrow?",
-                             "• 9:00 AM: Team Standup (30m)\n• 11:00 AM: Design Review (60m)")
+    def test_remove_all_when_empty(self):
+        main.INFO_EVENTS[:] = []
         replies, reply = _make_async_reply()
-        initial = len(main.NON_BLOCKING_EVENTS)
-        self._run(_handle_nonblock(reply, "last", hist_chan=hist_chan, user_id=user_id))
-        assert len(main.NON_BLOCKING_EVENTS) > initial
-        assert "Added" in replies[0]
-        # Cleanup history
-        main._conv_history.pop((hist_chan, user_id), None)
+        self._run(_handle_infoevent(reply, "remove all"))
+        assert "No " in replies[0]
