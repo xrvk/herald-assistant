@@ -1259,11 +1259,11 @@ class TestHandleReboot:
     def _run(self, coro):
         return asyncio.run(coro)
 
-    def test_reboot_sends_message_and_exits(self):
-        """_handle_reboot should reply with a reboot message then call os._exit(0)."""
+    def test_reboot_sends_message_and_restarts(self):
+        """_handle_reboot should reply with a reboot message then re-exec the process."""
         replies, reply = _make_async_reply()
-        with patch("os._exit") as mock_exit:
+        with patch("os.execv") as mock_execv:
             self._run(_handle_reboot(reply))
         assert len(replies) == 1
         assert "Rebooting" in replies[0]
-        mock_exit.assert_called_once_with(0)
+        mock_execv.assert_called_once()

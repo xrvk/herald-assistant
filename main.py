@@ -1,4 +1,5 @@
 import os
+import sys
 import re
 import json
 import asyncio
@@ -1063,7 +1064,7 @@ async def _handle_help(reply):
 async def _handle_reboot(reply):
     await reply("🔄 Rebooting now — back in a moment...")
     await asyncio.sleep(0.5)  # brief pause so Discord delivers the message
-    os._exit(0)
+    os.execv(sys.executable, [sys.executable] + sys.argv)
 
 async def _handle_cal(reply):
     with _cal_lock:

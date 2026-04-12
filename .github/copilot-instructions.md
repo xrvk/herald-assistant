@@ -16,23 +16,10 @@ Per-user/channel in-memory history (`_conv_history` dict of deques). `_get_histo
 
 ## Bot Process Management
 
-Use this exact local reboot sequence to avoid duplicate Discord replies:
+Local reboot (single command — kill, wait, restart):
 
 ```bash
-# stop local + docker instances
-pkill -9 -f "python3 main.py" 2>/dev/null; pkill -9 -f "Python main.py" 2>/dev/null; sleep 1
-docker stop scout_report 2>/dev/null || true
-docker stop context_bot 2>/dev/null || true  # legacy container name
-
-# start local bot (override Docker-specific OLLAMA_URL from .env)
-set -a && source .env && set +a && export OLLAMA_URL=http://localhost:11434 && .venv/bin/python3 main.py
-```
-
-Verify after start:
-
-```bash
-ps aux | grep "[p]ython.*main.py"
-docker ps --format '{{.Names}}' | egrep '^(scout_report|context_bot)$' || true
+pkill -9 -f "python3 main.py" 2>/dev/null; pkill -9 -f "Python main.py" 2>/dev/null; sleep 0.5; cd /Users/victor/Projects/Personal\ Context && set -a && source .env && set +a && export OLLAMA_URL=http://localhost:11434 && .venv/bin/python3 main.py
 ```
 
 Healthy startup logs must include:
@@ -51,7 +38,7 @@ All commands use `.` prefix (also registered as `/slash` commands). Smart-quote 
 | `.cal` | List connected calendars |
 | `.ignore` / `.infoevent` | Manage event filters. `add <pattern>` / `remove <pattern>` / `remove all` / (no args = list) |
 | `.demo` / `.demo off` | Activate/deactivate synthetic demo calendars from `demo/calendars.py` |
-| `.reboot` | Restart the bot process (Docker `restart: always` brings it back) |
+| `.reboot` | Restart the bot process (`os.execv` self-restart; Docker `restart: always` as fallback) |
 
 ## Demo Mode
 
