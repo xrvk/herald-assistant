@@ -174,29 +174,30 @@ _runtime_nonblocking: list[str] = []
 # Runtime-added filter entries are persisted to a JSON file so they survive reboots.
 # Path defaults to filters.json next to main.py; override with FILTERS_PATH env var.
 # In Docker, set FILTERS_PATH=/app/data/filters.json and mount a volume on /app/data.
-FILTERS_FILE = os.getenv("FILTERS_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "filters.json"))
+FILTERS_PATH = os.getenv("FILTERS_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "filters.json"))
 
 def _save_filters() -> None:
-    """Atomically persist runtime filter entries to FILTERS_FILE."""
+    """Atomically persist runtime filter entries to FILTERS_PATH."""
     data = {"ignored": list(_runtime_ignored), "nonblocking": list(_runtime_nonblocking)}
     try:
-        dir_ = os.path.dirname(FILTERS_FILE) or "."
+        dir_ = os.path.dirname(FILTERS_PATH) or "."
         with tempfile.NamedTemporaryFile("w", dir=dir_, delete=False, suffix=".tmp") as tmp:
             json.dump(data, tmp)
+            tmp.flush()
             tmp_path = tmp.name
-        os.replace(tmp_path, FILTERS_FILE)
+        os.replace(tmp_path, FILTERS_PATH)
     except OSError as e:
-        print(f"[Filters] Warning: could not save filters to {FILTERS_FILE}: {e}")
+        print(f"[Filters] Warning: could not save filters to {FILTERS_PATH}: {e}")
 
 def _load_filters() -> None:
-    """Load persisted runtime filter entries from FILTERS_FILE at startup."""
-    if not os.path.exists(FILTERS_FILE):
+    """Load persisted runtime filter entries from FILTERS_PATH at startup."""
+    if not os.path.exists(FILTERS_PATH):
         return
     try:
-        with open(FILTERS_FILE) as f:
+        with open(FILTERS_PATH) as f:
             data = json.load(f)
     except (OSError, ValueError) as e:
-        print(f"[Filters] Warning: could not load {FILTERS_FILE}: {e}")
+        print(f"[Filters] Warning: could not load {FILTERS_PATH}: {e}")
         return
     for entry in data.get("ignored", []):
         norm = _normalize_event(entry)
@@ -405,11 +406,11 @@ else:
     print("  History: disabled")
 if NON_BLOCKING_EVENTS:
     print(f"  Non-blocking events: {', '.join(NON_BLOCKING_EVENTS)}")
-_persisted_count = len(_runtime_ignored) + len(_runtime_nonblocking)
-if _persisted_count:
-    print(f"  Filters loaded: {_persisted_count} persisted entries from {FILTERS_FILE}")
+_loaded_count = len(_runtime_ignored) + len(_runtime_nonblocking)
+if _loaded_count:
+    print(f"  Filters loaded: {_loaded_count} persisted entries from {FILTERS_PATH}")
 else:
-    print(f"  Filters file: {FILTERS_FILE}")
+    print(f"  Filters file: {FILTERS_PATH}")
 if not DISCORD_BOT_TOKEN and not _schedules_enabled:
     print("  ⚠ Warning: No Discord bot token and no scheduled digests — nothing to do.")
     print("  Set DISCORD_BOT_TOKEN for chat, or enable schedules + APPRISE_URL for digests.")
