@@ -431,7 +431,7 @@ class TestBackendLogic:
         with patch.object(req, "post", side_effect=req.exceptions.ConnectionError("refused")), \
              patch.object(main, "_gemini_api_key", ""):
             result = main.ask_llm("what's tomorrow?", "some context")
-        assert "offline" in result.lower() or "unreachable" in result.lower()
+        assert result == "🔌 LLM is offline — Ollama may not be running or is unreachable."
 
     def test_ollama_fallback_passes_history(self):
         """Fallback to Gemini forwards the conversation history."""
