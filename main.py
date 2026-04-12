@@ -186,6 +186,26 @@ def _remove_runtime_filter(target: list, runtime_target: list) -> list[str]:
     runtime_target.clear()
     return removed
 
+def _remove_from_filter(target: list, runtime_target: list, names: list[str]) -> tuple[list[str], list[str]]:
+    """Remove specific normalized event names from a filter list.
+
+    Removes the entry from both the master list and, if present, the runtime list.
+    Returns (removed, not_found) lists of normalized names.
+    """
+    removed, not_found = [], []
+    for name in names:
+        norm = _normalize_event(name)
+        if not norm:
+            continue
+        if norm in target:
+            target.remove(norm)
+            if norm in runtime_target:
+                runtime_target.remove(norm)
+            removed.append(norm)
+        else:
+            not_found.append(norm)
+    return removed, not_found
+
 def _extract_events_from_reply(text: str) -> list[str]:
     """Extract potential calendar event names from bullet-pointed lines in a bot reply."""
     events = []
@@ -1172,9 +1192,11 @@ _HELP_TEXT = (
     "**`.ignore` / `.nonblock` examples**\n"
     "`.ignore` — show current ignore list\n"
     "`.ignore lunch, canceled` — ignore multiple events by name\n"
+    "`.ignore remove lunch` — un-ignore a specific event\n"
     "`.ignore last` — ignore events from the last bot reply\n"
-    "`.ignore clear` — remove runtime-added entries\n"
-    "`.nonblock standup` — mark standup as non-blocking\n\n"
+    "`.ignore clear` — remove all runtime-added entries\n"
+    "`.nonblock standup` — mark standup as non-blocking\n"
+    "`.nonblock remove standup` — un-mark a specific event\n\n"
     "**Or just ask a question** — no command needed!\n"
     "• *Am I free Tuesday afternoon?*\n"
     "• *What's on my calendar this weekend?*\n"
@@ -1317,7 +1339,7 @@ async def _handle_demo(reply, action, user_name="unknown"):
     print(f"[Demo] Enabled — Work: {w_stats['total_events']}, Personal: {p_stats['total_events']}, Family: {f_stats['total_events']} ({total} total)")
 
 async def _handle_ignore(reply, args_text, hist_chan=None, user_id=None):
-    """Handle .ignore command — add/list/clear the ignore filter."""
+    """Handle .ignore command — add/remove/list/clear the ignore filter."""
     args = args_text.strip()
 
     if not args:
@@ -1328,7 +1350,7 @@ async def _handle_ignore(reply, args_text, hist_chan=None, user_id=None):
                 lines.append(f"  • `{entry}`{tag}")
         else:
             lines.append("  *(empty)*")
-        lines.append("\nUse `.ignore <event>` to add, `.ignore clear` to remove runtime entries.")
+        lines.append("\nUse `.ignore <event>` to add, `.ignore remove <event>` to remove, `.ignore clear` to remove all runtime entries.")
         await reply("\n".join(lines))
         return
 
@@ -1340,6 +1362,23 @@ async def _handle_ignore(reply, args_text, hist_chan=None, user_id=None):
             await reply(f"Removed {len(removed)} runtime ignore entr{'y' if len(removed) == 1 else 'ies'}: {', '.join(f'`{r}`' for r in removed)}")
         else:
             await reply("No runtime ignore entries to remove.")
+        return
+
+    if args.lower().startswith("remove ") or args.lower() == "remove":
+        raw = args[7:].strip()  # strip "remove "
+        if not raw:
+            await reply("Usage: `.ignore remove <event>` or `.ignore remove <event1>, <event2>`")
+            return
+        names = [n.strip() for n in raw.split(",") if n.strip()]
+        removed, not_found = _remove_from_filter(IGNORED_EVENTS, _runtime_ignored, names)
+        _future_ctx_cache["ts"] = 0
+        _past_ctx_cache["ts"] = 0
+        parts = []
+        if removed:
+            parts.append(f"Removed: {', '.join(f'`{r}`' for r in removed)}")
+        if not_found:
+            parts.append(f"Not found: {', '.join(f'`{n}`' for n in not_found)}")
+        await reply(" | ".join(parts) if parts else "Nothing to remove.")
         return
 
     if args.lower() == "last":
@@ -1374,7 +1413,7 @@ async def _handle_ignore(reply, args_text, hist_chan=None, user_id=None):
         await reply("All provided events are already in the ignore list (or names were empty).")
 
 async def _handle_nonblock(reply, args_text, hist_chan=None, user_id=None):
-    """Handle .nonblock command — add/list/clear the non-blocking filter."""
+    """Handle .nonblock command — add/remove/list/clear the non-blocking filter."""
     args = args_text.strip()
 
     if not args:
@@ -1386,7 +1425,7 @@ async def _handle_nonblock(reply, args_text, hist_chan=None, user_id=None):
         else:
             lines.append("  *(empty)*")
         lines.append("\nNon-blocking events are shown to the AI but don't block your free time.")
-        lines.append("Use `.nonblock <event>` to add, `.nonblock clear` to remove runtime entries.")
+        lines.append("Use `.nonblock <event>` to add, `.nonblock remove <event>` to remove, `.nonblock clear` to remove all runtime entries.")
         await reply("\n".join(lines))
         return
 
@@ -1397,6 +1436,22 @@ async def _handle_nonblock(reply, args_text, hist_chan=None, user_id=None):
             await reply(f"Removed {len(removed)} runtime non-blocking entr{'y' if len(removed) == 1 else 'ies'}: {', '.join(f'`{r}`' for r in removed)}")
         else:
             await reply("No runtime non-blocking entries to remove.")
+        return
+
+    if args.lower().startswith("remove ") or args.lower() == "remove":
+        raw = args[7:].strip()  # strip "remove "
+        if not raw:
+            await reply("Usage: `.nonblock remove <event>` or `.nonblock remove <event1>, <event2>`")
+            return
+        names = [n.strip() for n in raw.split(",") if n.strip()]
+        removed, not_found = _remove_from_filter(NON_BLOCKING_EVENTS, _runtime_nonblocking, names)
+        _future_ctx_cache["ts"] = 0
+        parts = []
+        if removed:
+            parts.append(f"Removed: {', '.join(f'`{r}`' for r in removed)}")
+        if not_found:
+            parts.append(f"Not found: {', '.join(f'`{n}`' for n in not_found)}")
+        await reply(" | ".join(parts) if parts else "Nothing to remove.")
         return
 
     if args.lower() == "last":
