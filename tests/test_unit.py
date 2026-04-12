@@ -394,15 +394,20 @@ class TestBackendLogic:
     """Test backend switching logic (no actual LLM calls)."""
 
     def test_switch_map_coverage(self):
+        """Verify .llm command switch_map covers all expected shortcuts."""
         switch_map = {
             "g": "gemini", "gemini": "gemini",
             "o": "ollama", "ollama": "ollama",
             "1": "ollama", "2": "gemini",
+            "fl": "gemini", "flash-lite": "gemini",
+            "gf": "gemini", "flash": "gemini",
         }
         assert switch_map["g"] == "gemini"
         assert switch_map["o"] == "ollama"
         assert switch_map["1"] == "ollama"
         assert switch_map["2"] == "gemini"
+        assert switch_map["fl"] == "gemini"
+        assert switch_map["gf"] == "gemini"
         assert switch_map.get("invalid") is None
 
     def test_token_estimate(self):

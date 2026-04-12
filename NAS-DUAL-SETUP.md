@@ -330,7 +330,7 @@ Get a free key from [Google AI Studio](https://aistudio.google.com/app/apikey). 
 LLM backend: Ollama (gemma4:e4b at http://192.168.86.86:11434, Gemini fallback: gemini-2.5-flash-lite)
 ```
 
-Ollama is always tried first. Gemini is only used when Ollama is unreachable. `!switch g` / `!switch o` still work to override at runtime.
+Ollama is always tried first. Gemini is only used when Ollama is unreachable. `.llm g` / `.llm o` still work to override at runtime.
 
 ### Update docker-compose.yaml on the NAS
 

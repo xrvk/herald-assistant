@@ -329,7 +329,7 @@ nohup python main.py > bot.log 2>&1 &
 
 1. **Check the bot is online:** It should appear as online in your Discord server
 2. **Send a test message:** Type a question in the configured channel or DM the bot
-3. **Try bot commands:** `!cal` lists connected calendars, `!llm` shows the active backend, `!switch g` / `!switch o` switches between Gemini and Ollama
+3. **Try bot commands:** `!cal` lists connected calendars, `!llm` shows the active backend, `.llm g` / `.llm o` switches between Gemini and Ollama
 4. **Expected response time:** 1–5 seconds with Gemini; 5–15 seconds with `gemma4:e4b` on Apple Silicon
 5. **Check scheduled jobs:** Look for the schedule summary in the bot's startup logs
 
