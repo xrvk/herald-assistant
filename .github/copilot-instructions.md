@@ -51,6 +51,7 @@ All commands use `.` prefix (also registered as `/slash` commands). Smart-quote 
 | `.cal` | List connected calendars |
 | `.ignore` / `.infoevent` | Manage event filters. `add <pattern>` / `remove <pattern>` / `remove all` / (no args = list) |
 | `.demo` / `.demo off` | Activate/deactivate synthetic demo calendars from `demo/calendars.py` |
+| `.reboot` | Restart the bot process (Docker `restart: always` brings it back) |
 
 ## Demo Mode
 
@@ -58,7 +59,7 @@ All commands use `.` prefix (also registered as `/slash` commands). Smart-quote 
 
 ## Slash Commands
 
-All `.` prefix commands are also registered as Discord slash commands (`/help`, `/llm`, `/cal`, `/ignore`, `/infoevent`, `/demo`) via `discord.app_commands.CommandTree`. The tree syncs globally on first `on_ready` (may take ~1hr to appear in Discord). Both prefix and slash commands share the same handler functions (`_handle_help`, `_handle_llm_show`, `_handle_llm_switch`, `_handle_cal`, `_handle_ignore`, `_handle_infoevent`, `_handle_demo`).
+All `.` prefix commands are also registered as Discord slash commands (`/help`, `/llm`, `/cal`, `/ignore`, `/infoevent`, `/demo`, `/reboot`) via `discord.app_commands.CommandTree`. The tree syncs globally on first `on_ready` (may take ~1hr to appear in Discord). Both prefix and slash commands share the same handler functions (`_handle_help`, `_handle_llm_show`, `_handle_llm_switch`, `_handle_cal`, `_handle_ignore`, `_handle_infoevent`, `_handle_demo`, `_handle_reboot`).
 
 ## Test Suite
 

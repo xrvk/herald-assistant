@@ -1048,7 +1048,8 @@ _HELP_TEXT = (
     "`.llm` — Show/switch LLM backend\n"
     "`.ignore` — Manage events hidden from the AI entirely\n"
     "`.infoevent` — Manage events visible to AI but marked as informational\n"
-    "`.demo` / `.demo off` — Toggle demo calendars\n\n"
+    "`.demo` / `.demo off` — Toggle demo calendars\n"
+    "`.reboot` — Restart the bot\n\n"
     "_Run `.ignore` or `.infoevent` with no arguments to see sub-commands._\n\n"
     "**Or just ask a question** — no command needed!\n"
     "• *Am I free Tuesday afternoon?*\n"
@@ -1058,6 +1059,11 @@ _HELP_TEXT = (
 
 async def _handle_help(reply):
     await reply(_HELP_TEXT)
+
+async def _handle_reboot(reply):
+    await reply("🔄 Rebooting now — back in a moment...")
+    await asyncio.sleep(0.5)  # brief pause so Discord delivers the message
+    os._exit(0)
 
 async def _handle_cal(reply):
     with _cal_lock:
@@ -1348,6 +1354,13 @@ async def slash_infoevent(interaction: discord.Interaction, events: str = ""):
     hist_chan = interaction.user.id if is_dm else interaction.channel_id
     await _handle_infoevent(interaction.response.send_message, events, hist_chan, interaction.user.id)
 
+@tree.command(name="reboot", description="Restart the bot process")
+async def slash_reboot(interaction: discord.Interaction):
+    if DISCORD_ALLOWED_USERS and interaction.user.id not in DISCORD_ALLOWED_USERS:
+        await interaction.response.send_message("You are not authorized.", ephemeral=True)
+        return
+    await _handle_reboot(interaction.response.send_message)
+
 @client.event
 async def on_ready():
     global _scheduler_started, _tree_synced, _ready_at
@@ -1407,6 +1420,13 @@ async def on_message(message):
     # .help command — show available commands and tips
     if question.lower().startswith(".help"):
         await _handle_help(message.reply)
+        return
+
+    # .reboot command — restart the bot process (Docker restart: always brings it back)
+    if question.lower().startswith(".reboot"):
+        if DISCORD_ALLOWED_USERS and message.author.id not in DISCORD_ALLOWED_USERS:
+            return
+        await _handle_reboot(message.reply)
         return
 
     # .llm command — show current LLM backend options / switch backend
