@@ -1,5 +1,5 @@
 """
-Demo calendar generator for tests and !demo mode.
+Demo calendar generator for tests and .demo mode.
 
 Generates two realistic 7-day ICS calendars relative to any start date:
   - Work: busy developer (standups, 1:1s, sprint ceremonies, reviews)
@@ -16,6 +16,8 @@ Usage:
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from icalendar import Calendar, Event
+
+from demo.calendars import calendar_stats  # shared with demo/calendars.py
 
 _TZ = ZoneInfo("America/Los_Angeles")
 
@@ -163,14 +165,3 @@ def generate_personal_ics(ref: datetime | None = None) -> Calendar:
     _evt(cal, "Meal Prep", d.replace(hour=17, minute=0), 60)
 
     return cal
-
-
-# ── Summary stats (for debugging / test output) ──
-
-def calendar_stats(cal: Calendar) -> dict:
-    """Return a summary of events in a calendar."""
-    events = [c for c in cal.walk() if c.name == "VEVENT"]
-    return {
-        "total_events": len(events),
-        "summaries": [str(e.get("summary")) for e in events],
-    }

@@ -124,26 +124,26 @@ class BotTester:
     # ── Individual tests ──
 
     async def test_cal_command(self):
-        """!cal — list connected calendars."""
-        print("  Testing !cal ...")
-        resp = await self.send_and_wait("!cal")
+        """.cal — list connected calendars."""
+        print("  Testing .cal ...")
+        resp = await self.send_and_wait(".cal")
         if resp is None:
-            self.results.append(TestResult("!cal", False, "No response (timeout)"))
+            self.results.append(TestResult(".cal", False, "No response (timeout)"))
             return
         ok = "connected calendars" in resp.lower() or "calendar" in resp.lower()
-        self.results.append(TestResult("!cal", ok, f"Response: {resp[:120]}"))
+        self.results.append(TestResult(".cal", ok, f"Response: {resp[:120]}"))
 
     async def test_llm_command(self):
-        """!llm — show current backend."""
-        print("  Testing !llm ...")
-        resp = await self.send_and_wait("!llm")
+        """.llm — show current backend."""
+        print("  Testing .llm ...")
+        resp = await self.send_and_wait(".llm")
         if resp is None:
-            self.results.append(TestResult("!llm", False, "No response (timeout)"))
+            self.results.append(TestResult(".llm", False, "No response (timeout)"))
             return
         has_ollama = "ollama" in resp.lower()
         has_gemini = "gemini" in resp.lower()
         ok = has_ollama and has_gemini  # should list both options
-        self.results.append(TestResult("!llm", ok, f"Response: {resp[:120]}"))
+        self.results.append(TestResult(".llm", ok, f"Response: {resp[:120]}"))
 
     async def test_switch_to_gemini(self):
         """.llm g — switch to Gemini."""

@@ -2,3 +2,5 @@
 __pycache__/
 *.pyc
 .venv/
+filters.json
+.pytest_cache/
