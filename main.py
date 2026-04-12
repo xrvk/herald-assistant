@@ -72,7 +72,7 @@ if _llm_backend == "gemini":
     _get_gemini_client()  # validate at startup
     print(f"LLM backend: Gemini ({get_gemini_model()})")
 else:
-    _fallback_note = f", Gemini fallback: {GEMINI_MODELS['flash-lite']}" if _gemini_api_key else ""
+    _fallback_note = f", Gemini fallback: {get_gemini_model()}" if _gemini_api_key else ""
     print(f"LLM backend: Ollama ({OLLAMA_MODEL} at {OLLAMA_URL}{_fallback_note})")
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
@@ -649,7 +649,7 @@ def ask_llm(question, calendar_context, include_past=False, history=None):
         return resp.json()["message"]["content"]
     except requests.exceptions.ConnectionError:
         if _gemini_api_key:
-            print("[Fallback] Ollama unreachable — falling back to Gemini flash-lite")
+            print(f"[Fallback] Ollama unreachable — falling back to Gemini ({get_gemini_model()})")
             return ask_gemini(question, calendar_context, history=history)
         return "🔌 LLM is offline — Ollama may not be running or is unreachable."
     except requests.exceptions.Timeout:

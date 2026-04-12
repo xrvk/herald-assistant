@@ -44,8 +44,8 @@ services:
       # ── LLM Backend ───────────────────────────────────────────────────
       # "gemini" = cloud, recommended (free tier, no GPU needed)
       # "ollama" = local/private (requires Ollama on a machine on your LAN)
-      #            If GEMINI_API_KEY is also set, Gemini flash-lite is used
-      #            automatically when Ollama is unreachable (NAS-DUAL-SETUP.md appendix).
+      #            If GEMINI_API_KEY is also set, Gemini is used automatically
+      #            when Ollama is unreachable (NAS-DUAL-SETUP.md appendix).
       LLM_BACKEND: "gemini"
 
       # Gemini: get a free key at https://aistudio.google.com/app/apikey
