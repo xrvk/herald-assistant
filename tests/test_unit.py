@@ -1175,6 +1175,28 @@ class TestHandleIgnore:
         self._run(_handle_ignore(reply, ""))
         assert "remove" in replies[0]
 
+    def test_r_shorthand_removes_entry(self):
+        _, reply_add = _make_async_reply()
+        self._run(_handle_ignore(reply_add, "standup"))
+        assert "standup" in main.IGNORED_EVENTS
+        replies, reply = _make_async_reply()
+        self._run(_handle_ignore(reply, "r standup"))
+        assert "standup" not in main.IGNORED_EVENTS
+        assert "Removed" in replies[0]
+
+    def test_r_all_clears_list(self):
+        _, reply_add = _make_async_reply()
+        self._run(_handle_ignore(reply_add, "standup"))
+        replies, reply = _make_async_reply()
+        self._run(_handle_ignore(reply, "r all"))
+        assert "standup" not in main.IGNORED_EVENTS
+        assert "Removed" in replies[0]
+
+    def test_r_no_args_shows_usage(self):
+        replies, reply = _make_async_reply()
+        self._run(_handle_ignore(reply, "r"))
+        assert "Usage" in replies[0]
+
 
 class TestHandleInfoevent:
     """Integration tests for _handle_infoevent handler logic."""
@@ -1238,6 +1260,28 @@ class TestHandleInfoevent:
         replies, reply = _make_async_reply()
         self._run(_handle_infoevent(reply, ""))
         assert "remove" in replies[0]
+
+    def test_r_shorthand_removes_entry(self):
+        _, reply_add = _make_async_reply()
+        self._run(_handle_infoevent(reply_add, "standup"))
+        assert "standup" in main.INFO_EVENTS
+        replies, reply = _make_async_reply()
+        self._run(_handle_infoevent(reply, "r standup"))
+        assert "standup" not in main.INFO_EVENTS
+        assert "Removed" in replies[0]
+
+    def test_r_all_clears_list(self):
+        _, reply_add = _make_async_reply()
+        self._run(_handle_infoevent(reply_add, "standup"))
+        replies, reply = _make_async_reply()
+        self._run(_handle_infoevent(reply, "r all"))
+        assert "standup" not in main.INFO_EVENTS
+        assert "Removed" in replies[0]
+
+    def test_r_no_args_shows_usage(self):
+        replies, reply = _make_async_reply()
+        self._run(_handle_infoevent(reply, "r"))
+        assert "Usage" in replies[0]
 
     def test_remove_all_when_empty(self):
         main.INFO_EVENTS[:] = []

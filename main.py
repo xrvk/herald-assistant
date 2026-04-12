@@ -1047,11 +1047,15 @@ _HELP_TEXT = (
     "`.help` — Show this help message\n"
     "`.cal` — List connected calendars\n"
     "`.llm` — Show/switch LLM backend\n"
-    "`.ignore` — Manage events hidden from the AI entirely\n"
-    "`.infoevent` — Manage events visible to AI but marked as informational\n"
     "`.demo` / `.demo off` — Toggle demo calendars\n"
     "`.reboot` — Restart the bot\n\n"
-    "_Run `.ignore` or `.infoevent` with no arguments to see sub-commands._\n\n"
+    "**Filters** (hide or tag events)\n"
+    "`.ignore` (`.ig`) — Show current ignore list\n"
+    "`.ignore <event(s)>` — Add events (comma-separated)\n"
+    "`.ignore remove` (`r`) `<event(s)>` — Remove entries\n"
+    "`.infoevent` (`.ie`) — Show current info-event list\n"
+    "`.infoevent <event(s)>` — Add events (comma-separated)\n"
+    "`.infoevent remove` (`r`) `<event(s)>` — Remove entries\n\n"
     "**Or just ask a question** — no command needed!\n"
     "• *Am I free Tuesday afternoon?*\n"
     "• *What's on my calendar this weekend?*\n"
@@ -1192,7 +1196,7 @@ async def _handle_demo(reply, action, user_name="unknown"):
 
 async def _handle_filter_command(reply, args_text, target_list, label, cmd,
                                 invalidate_past=False, list_description=None,
-                                hist_chan=None, user_id=None):
+                                hist_chan=None, user_id=None, short_cmd=None):
     """Generic handler for filter commands (.ignore / .infoevent).
 
     Args:
@@ -1205,6 +1209,7 @@ async def _handle_filter_command(reply, args_text, target_list, label, cmd,
         list_description: Optional extra description shown when listing entries.
         hist_chan: Channel/user key for conversation history lookup (for 'last').
         user_id: User ID for conversation history lookup (for 'last').
+        short_cmd: Short alias (e.g. "i", "ie") shown in usage hints.
     """
     args = args_text.strip()
 
@@ -1222,11 +1227,12 @@ async def _handle_filter_command(reply, args_text, target_list, label, cmd,
             lines.append("  *(empty)*")
         if list_description:
             lines.append(f"\n{list_description}")
-        lines.append(f"Use `.{cmd} <event>` to add, `.{cmd} remove <event>` to remove, `.{cmd} remove all` to clear.")
+        sc = short_cmd or cmd
+        lines.append(f"\n`.{sc} <event, …>` to add, `.{sc} r <event, …>` to remove, `.{sc} r all` to clear.")
         await reply("\n".join(lines))
         return
 
-    if args.lower() == "remove all":
+    if args.lower() in ("remove all", "r all"):
         removed = _remove_all_filter(target_list)
         _invalidate_caches()
         if removed:
@@ -1235,8 +1241,11 @@ async def _handle_filter_command(reply, args_text, target_list, label, cmd,
             await reply(f"No {label.lower()} entries to remove.")
         return
 
-    if args.lower().startswith("remove ") or args.lower() == "remove":
-        raw = args[len("remove "):].strip()
+    if args.lower().startswith("remove ") or args.lower() == "remove" or args.lower().startswith("r ") or args.lower() == "r":
+        if args.lower().startswith("r ") and not args.lower().startswith("re"):
+            raw = args[2:].strip()
+        else:
+            raw = args[len("remove "):].strip()
         if not raw:
             await reply(f"Usage: `.{cmd} remove <event>` or `.{cmd} remove <event1>, <event2>`")
             return
@@ -1285,6 +1294,7 @@ async def _handle_ignore(reply, args_text, hist_chan=None, user_id=None):
     await _handle_filter_command(
         reply, args_text, IGNORED_EVENTS, "Ignore", "ignore",
         invalidate_past=True, hist_chan=hist_chan, user_id=user_id,
+        short_cmd="ig",
     )
 
 async def _handle_infoevent(reply, args_text, hist_chan=None, user_id=None):
@@ -1293,6 +1303,7 @@ async def _handle_infoevent(reply, args_text, hist_chan=None, user_id=None):
         reply, args_text, INFO_EVENTS, "Info-event", "infoevent",
         list_description="Info events are shown to the AI but marked as informational.",
         hist_chan=hist_chan, user_id=user_id,
+        short_cmd="ie",
     )
 
 # ── Slash commands ──
@@ -1461,10 +1472,22 @@ async def on_message(message):
         await _handle_ignore(message.reply, question[7:].strip(), hist_chan, message.author.id)
         return
 
-    # .infoevent command — add events to the info-event filter
+    # .infoevent / .ie command — add events to the info-event filter
     if question.lower().startswith(".infoevent"):
         hist_chan = message.author.id if is_dm else message.channel.id
         await _handle_infoevent(message.reply, question[10:].strip(), hist_chan, message.author.id)
+        return
+
+    # .ie alias for .infoevent (checked after .infoevent)
+    if question.lower().startswith(".ie") and (len(question) == 3 or not question[3:4].isalpha()):
+        hist_chan = message.author.id if is_dm else message.channel.id
+        await _handle_infoevent(message.reply, question[3:].strip(), hist_chan, message.author.id)
+        return
+
+    # .ig alias for .ignore (checked after .ignore, .infoevent, .ie)
+    if question.lower().startswith(".ig") and (len(question) == 3 or not question[3:4].isalpha()):
+        hist_chan = message.author.id if is_dm else message.channel.id
+        await _handle_ignore(message.reply, question[3:].strip(), hist_chan, message.author.id)
         return
 
     # Natural-language shortcuts: "add X to ignore list" / "mark X as info event"
