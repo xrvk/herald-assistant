@@ -39,6 +39,8 @@ _TEST_ENV = {
     "APPRISE_URL": "",
     "CONV_HISTORY_TURNS": "3",
     "CONV_HISTORY_TTL": "1800",
+    # Point to a non-existent path so _load_filters() is a no-op at import time
+    "FILTERS_PATH": "/tmp/scout-test-filters-nonexistent.json",
 }
 
 
