@@ -93,8 +93,8 @@ All config lives in a single `.env` file — copy [.env.example](.env.example) a
 | `WEEKNIGHT_SCHEDULE` | `off` | Weeknight digest schedule: `"days HH:MM"` or `off` |
 | `WEEKEND_SCHEDULE` | `off` | Weekend preview schedule: `"days HH:MM"` or `off` |
 | `DISCORD_ALLOWED_USERS` | *(not set)* | Security: bot will only respond to these Discord user IDs (comma-separated). If unset, all users can interact |
-| `IGNORED_EVENTS` | *(not set)* | Pre-seed events hidden from digests and LLM (comma-separated substrings, case-insensitive). Quotes and special chars stripped for fuzzy matching. Can also be managed at runtime with `.ignore` — no initial setup required |
-| `NON_BLOCKING_EVENTS` | *(not set)* | Pre-seed events visible to LLM but that don't block your availability (same format as `IGNORED_EVENTS`). Can also be managed at runtime with `.nonblock` — no initial setup required |
+| `IGNORED_EVENTS` | *(not set)* | Optional seed for the ignore list (comma-separated substrings, case-insensitive). Quotes and special chars stripped for fuzzy matching. Can also be managed at runtime with `.ignore` — no initial setup required |
+| `NON_BLOCKING_EVENTS` | *(not set)* | Optional seed for the non-blocking list (same format as `IGNORED_EVENTS`). Can also be managed at runtime with `.nonblock` — no initial setup required |
 | `MAX_OUTPUT_TOKENS` | `512` | Max LLM response tokens (increase for longer answers) |
 | `FREE_WORK_HOURS` | `8-17` | Work hours for `.free` command (24h format, e.g. `9-18`) |
 
@@ -121,7 +121,7 @@ Both lists support the same sub-commands:
 .ignore clear                 # remove all runtime-added entries (keeps env defaults)
 ```
 
-You can optionally **bootstrap** the lists at startup via env vars — useful for recurring events you always want filtered:
+You can optionally **seed** the lists at startup via env vars — useful for recurring events you always want filtered:
 
 ```env
 IGNORED_EVENTS="pick up kids,lunch,Mom's Appointment"
@@ -130,7 +130,7 @@ NON_BLOCKING_EVENTS="Mom Babysit,Dog Walker,Lunch Break"
 
 These are entirely optional — both lists start empty if not set and can be built up through bot commands alone.
 Runtime-added entries are tagged `*(runtime)*` in the list view; env-seeded entries are tagged `*(env)*`.
-Env entries persist across restarts; runtime entries are lost when the bot restarts.
+**All runtime changes are automatically persisted to `filters.json`** and reloaded on restart — no action needed. In Docker, the provided `docker-compose.yaml` mounts a named volume so the file survives container rebuilds.
 
 ## Project Structure
 

@@ -1,9 +1,11 @@
 import os
 import re
+import json
 import asyncio
 import atexit
 import signal
 import time
+import tempfile
 import threading
 import requests
 from concurrent.futures import ThreadPoolExecutor
@@ -168,6 +170,47 @@ NON_BLOCKING_EVENTS = _parse_event_list(_nb_raw)
 _runtime_ignored: list[str] = []
 _runtime_nonblocking: list[str] = []
 
+# ── Filter persistence ──
+# Runtime-added filter entries are persisted to a JSON file so they survive reboots.
+# Path defaults to filters.json next to main.py; override with FILTERS_PATH env var.
+# In Docker, set FILTERS_PATH=/app/data/filters.json and mount a volume on /app/data.
+FILTERS_FILE = os.getenv("FILTERS_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "filters.json"))
+
+def _save_filters() -> None:
+    """Atomically persist runtime filter entries to FILTERS_FILE."""
+    data = {"ignored": list(_runtime_ignored), "nonblocking": list(_runtime_nonblocking)}
+    try:
+        dir_ = os.path.dirname(FILTERS_FILE) or "."
+        with tempfile.NamedTemporaryFile("w", dir=dir_, delete=False, suffix=".tmp") as tmp:
+            json.dump(data, tmp)
+            tmp_path = tmp.name
+        os.replace(tmp_path, FILTERS_FILE)
+    except OSError as e:
+        print(f"[Filters] Warning: could not save filters to {FILTERS_FILE}: {e}")
+
+def _load_filters() -> None:
+    """Load persisted runtime filter entries from FILTERS_FILE at startup."""
+    if not os.path.exists(FILTERS_FILE):
+        return
+    try:
+        with open(FILTERS_FILE) as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        print(f"[Filters] Warning: could not load {FILTERS_FILE}: {e}")
+        return
+    for entry in data.get("ignored", []):
+        norm = _normalize_event(entry)
+        if norm and norm not in IGNORED_EVENTS:
+            IGNORED_EVENTS.append(norm)
+            _runtime_ignored.append(norm)
+    for entry in data.get("nonblocking", []):
+        norm = _normalize_event(entry)
+        if norm and norm not in NON_BLOCKING_EVENTS:
+            NON_BLOCKING_EVENTS.append(norm)
+            _runtime_nonblocking.append(norm)
+
+_load_filters()
+
 def _add_to_filter(target: list[str], runtime_target: list[str], names: list[str]) -> list[str]:
     """Add normalized event names to a filter list, skipping duplicates. Returns added names."""
     added = []
@@ -177,6 +220,8 @@ def _add_to_filter(target: list[str], runtime_target: list[str], names: list[str
             target.append(norm)
             runtime_target.append(norm)
             added.append(norm)
+    if added:
+        _save_filters()
     return added
 
 def _remove_runtime_filter(target: list[str], runtime_target: list[str]) -> list[str]:
@@ -186,6 +231,8 @@ def _remove_runtime_filter(target: list[str], runtime_target: list[str]) -> list
         if norm in target:
             target.remove(norm)
     runtime_target.clear()
+    if removed:
+        _save_filters()
     return removed
 
 def _remove_from_filter(target: list[str], runtime_target: list[str], names: list[str]) -> tuple[list[str], list[str]]:
@@ -206,6 +253,8 @@ def _remove_from_filter(target: list[str], runtime_target: list[str], names: lis
             removed.append(norm)
         else:
             not_found.append(norm)
+    if removed:
+        _save_filters()
     return removed, not_found
 
 def _extract_events_from_reply(text: str) -> list[str]:
@@ -356,6 +405,11 @@ else:
     print("  History: disabled")
 if NON_BLOCKING_EVENTS:
     print(f"  Non-blocking events: {', '.join(NON_BLOCKING_EVENTS)}")
+_persisted_count = len(_runtime_ignored) + len(_runtime_nonblocking)
+if _persisted_count:
+    print(f"  Filters loaded: {_persisted_count} persisted entries from {FILTERS_FILE}")
+else:
+    print(f"  Filters file: {FILTERS_FILE}")
 if not DISCORD_BOT_TOKEN and not _schedules_enabled:
     print("  ⚠ Warning: No Discord bot token and no scheduled digests — nothing to do.")
     print("  Set DISCORD_BOT_TOKEN for chat, or enable schedules + APPRISE_URL for digests.")
@@ -1204,8 +1258,8 @@ _HELP_TEXT = (
     "`.ignore clear` — remove all runtime-added entries (keeps env defaults)\n"
     "`.nonblock <event(s)>` — mark events as non-blocking\n"
     "`.nonblock remove <event(s)>` — un-mark a specific event\n"
-    "_Tip: pre-seed lists with `IGNORED_EVENTS` / `NON_BLOCKING_EVENTS` in `.env`, "
-    "or manage them entirely at runtime — no initial setup required._\n\n"
+    "_Tip: filter lists persist across restarts automatically. "
+    "Optionally pre-seed with `IGNORED_EVENTS` / `NON_BLOCKING_EVENTS` in `.env`._\n\n"
     "**Or just ask a question** — no command needed!\n"
     "• *Am I free Tuesday afternoon?*\n"
     "• *What's on my calendar this weekend?*\n"

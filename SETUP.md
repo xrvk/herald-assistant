@@ -236,8 +236,9 @@ Here's the full reference:
 | `WEEKNIGHT_SCHEDULE` | `off` | Weeknight digest schedule: `"days HH:MM"` or `off` |
 | `WEEKEND_SCHEDULE` | `off` | Weekend preview schedule: `"days HH:MM"` or `off` |
 | `WORK_LABELS` | *(not set)* | Comma-separated calendar labels treated as work (must match your `CALENDAR_N_LABEL` values). If empty, weeknight digests will show "No meetings" |
-| `IGNORED_EVENTS` | *(not set)* | Hide events from digests and LLM. Comma-separated substrings, case-insensitive. Quotes and special characters are stripped automatically for fuzzy matching (e.g. `"Mom's Appt"` matches `Moms Appt`) |
-| `NON_BLOCKING_EVENTS` | *(not set)* | Events visible to the LLM but treated as informational — they don't block your availability. Same format as `IGNORED_EVENTS` |
+| `IGNORED_EVENTS` | *(not set)* | Optional seed for the ignore list. Comma-separated substrings, case-insensitive. Quotes and special characters are stripped automatically for fuzzy matching (e.g. `"Mom's Appt"` matches `Moms Appt`). Manage at runtime with `.ignore`. |
+| `NON_BLOCKING_EVENTS` | *(not set)* | Optional seed for the non-blocking list. Events visible to the LLM but treated as informational — they don't block your availability. Same format as `IGNORED_EVENTS`. Manage at runtime with `.nonblock`. |
+| `FILTERS_PATH` | `filters.json` | Path where runtime `.ignore`/`.nonblock` changes are persisted across reboots. In Docker, set to `/app/data/filters.json` and mount a volume on `/app/data` (done automatically by the provided `docker-compose.yaml`). |
 | `CONTEXT_DAYS` | `7` | Days of future events the LLM can see |
 | `HISTORY_DAYS` | `10` | Days of past events for history questions (`0` = off) |
 | `HISTORY_CACHE_TTL` | `21600` | Past events cache in seconds (6h) |
