@@ -233,6 +233,8 @@ The bot is I/O-bound (HTTP calls to calendar feeds and the Gemini API), not CPU-
 
 Use this setup if you prefer a **fully local/private LLM** or don't want to use a cloud API. The bot runs on the NAS and calls Ollama on a MacBook (or any machine) over the LAN.
 
+> **Local dev users:** If you're running the bot directly on your Mac (not on a NAS), you don't need any of the network config below. Set `LLM_BACKEND=ollama` in your `.env` and Ollama runs on the same machine. You can switch to Gemini as a fallback at any time with `!switch g` (requires `GEMINI_API_KEY` set in `.env`).
+
 ### Architecture
 
 ```
