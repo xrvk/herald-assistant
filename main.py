@@ -836,7 +836,6 @@ def _prepare_ollama_messages(system_prompt, question, history, num_ctx):
 
 def ask_llm(question, calendar_context, include_past=False, history=None):
     """Send a question + calendar context to Ollama and return the response."""
-    global _llm_backend
     num_ctx = _OLLAMA_CTX_WITH_PAST if include_past else _OLLAMA_CTX_BASE
     system_prompt = f"{SYSTEM_PROMPT}\n\nCALENDAR DATA:\n{calendar_context}"
     messages, num_ctx = _prepare_ollama_messages(system_prompt, question, history, num_ctx)
@@ -863,8 +862,7 @@ def ask_llm(question, calendar_context, include_past=False, history=None):
         is_timeout = isinstance(e, requests.exceptions.Timeout)
         if _gemini_api_key:
             reason = "timed out" if is_timeout else "offline"
-            print(f"[LLM] Ollama {reason} — falling back to Gemini ({get_gemini_model()})")
-            _llm_backend = "gemini"
+            print(f"[LLM] Ollama {reason} — one-time fallback to Gemini ({get_gemini_model()})")
             return ask_gemini(question, calendar_context, history=history)
         return _ERR_OLLAMA_TIMEOUT if is_timeout else _ERR_OLLAMA_OFFLINE
     except Exception as e:
@@ -1185,40 +1183,59 @@ async def _handle_demo(reply, action, user_name="unknown"):
     )
     print(f"[Demo] Enabled — Work: {w_stats['total_events']}, Personal: {p_stats['total_events']}, Family: {f_stats['total_events']} ({total} total)")
 
-async def _handle_ignore(reply, args_text, hist_chan=None, user_id=None):
-    """Handle .ignore command — add/remove/list/clear the ignore filter."""
+async def _handle_filter_command(reply, args_text, target_list, label, cmd,
+                                invalidate_past=False, list_description=None,
+                                hist_chan=None, user_id=None):
+    """Generic handler for filter commands (.ignore / .infoevent).
+
+    Args:
+        reply: Async callable to send a response message.
+        args_text: Raw argument string after the command name.
+        target_list: The mutable filter list to operate on (e.g. IGNORED_EVENTS).
+        label: Display name for the filter (e.g. "Ignore", "Info-event").
+        cmd: Command name without dot prefix (e.g. "ignore", "infoevent").
+        invalidate_past: If True, also invalidate the past-context cache on changes.
+        list_description: Optional extra description shown when listing entries.
+        hist_chan: Channel/user key for conversation history lookup (for 'last').
+        user_id: User ID for conversation history lookup (for 'last').
+    """
     args = args_text.strip()
 
+    def _invalidate_caches():
+        _future_ctx_cache["ts"] = 0
+        if invalidate_past:
+            _past_ctx_cache["ts"] = 0
+
     if not args:
-        lines = [f"**Ignore list** ({len(IGNORED_EVENTS)} entries):"]
-        if IGNORED_EVENTS:
-            for entry in IGNORED_EVENTS:
+        lines = [f"**{label} list** ({len(target_list)} entries):"]
+        if target_list:
+            for entry in target_list:
                 lines.append(f"  • `{entry}`")
         else:
             lines.append("  *(empty)*")
-        lines.append("\nUse `.ignore <event>` to add, `.ignore remove <event>` to remove, `.ignore remove all` to clear.")
+        if list_description:
+            lines.append(f"\n{list_description}")
+        lines.append(f"Use `.{cmd} <event>` to add, `.{cmd} remove <event>` to remove, `.{cmd} remove all` to clear.")
         await reply("\n".join(lines))
         return
 
     if args.lower() == "remove all":
-        removed = _remove_all_filter(IGNORED_EVENTS)
-        _future_ctx_cache["ts"] = 0
-        _past_ctx_cache["ts"] = 0
+        removed = _remove_all_filter(target_list)
+        _invalidate_caches()
         if removed:
-            await reply(f"Removed {len(removed)} ignore entr{'y' if len(removed) == 1 else 'ies'}: {', '.join(f'`{r}`' for r in removed)}")
+            await reply(f"Removed {len(removed)} {label.lower()} entr{'y' if len(removed) == 1 else 'ies'}: {', '.join(f'`{r}`' for r in removed)}")
         else:
-            await reply("No ignore entries to remove.")
+            await reply(f"No {label.lower()} entries to remove.")
         return
 
     if args.lower().startswith("remove ") or args.lower() == "remove":
         raw = args[len("remove "):].strip()
         if not raw:
-            await reply("Usage: `.ignore remove <event>` or `.ignore remove <event1>, <event2>`")
+            await reply(f"Usage: `.{cmd} remove <event>` or `.{cmd} remove <event1>, <event2>`")
             return
         names = [n.strip() for n in raw.split(",") if n.strip()]
-        removed, not_found = _remove_from_filter(IGNORED_EVENTS, names)
-        _future_ctx_cache["ts"] = 0
-        _past_ctx_cache["ts"] = 0
+        removed, not_found = _remove_from_filter(target_list, names)
+        _invalidate_caches()
         parts = []
         if removed:
             parts.append(f"Removed: {', '.join(f'`{r}`' for r in removed)}")
@@ -1234,99 +1251,42 @@ async def _handle_ignore(reply, args_text, hist_chan=None, user_id=None):
             if history:
                 last_reply = history[-1][1]
         if not last_reply:
-            await reply("No previous bot reply found. Use `.ignore <event name>` to add events directly.")
+            await reply(f"No previous bot reply found. Use `.{cmd} <event name>` to add events directly.")
             return
         events = _extract_events_from_reply(last_reply)
         if not events:
-            await reply("Couldn't extract event names from the last reply. Use `.ignore <event name>` directly.")
+            await reply(f"Couldn't extract event names from the last reply. Use `.{cmd} <event name>` directly.")
             return
-        added = _add_to_filter(IGNORED_EVENTS, events)
-        _future_ctx_cache["ts"] = 0
-        _past_ctx_cache["ts"] = 0
+        added = _add_to_filter(target_list, events)
+        _invalidate_caches()
         if added:
-            await reply(f"Added {len(added)} event(s) to ignore list: {', '.join(f'`{a}`' for a in added)}")
+            await reply(f"Added {len(added)} event(s) to {label.lower()} list: {', '.join(f'`{a}`' for a in added)}")
         else:
-            await reply("All found events are already in the ignore list.")
+            await reply(f"All found events are already in the {label.lower()} list.")
         return
 
     names = [n.strip() for n in args.split(",") if n.strip()]
-    added = _add_to_filter(IGNORED_EVENTS, names)
-    _future_ctx_cache["ts"] = 0
-    _past_ctx_cache["ts"] = 0
+    added = _add_to_filter(target_list, names)
+    _invalidate_caches()
     if added:
-        await reply(f"Added {len(added)} event(s) to ignore list: {', '.join(f'`{a}`' for a in added)}")
+        await reply(f"Added {len(added)} event(s) to {label.lower()} list: {', '.join(f'`{a}`' for a in added)}")
     else:
-        await reply("All provided events are already in the ignore list (or names were empty).")
+        await reply(f"All provided events are already in the {label.lower()} list (or names were empty).")
+
+async def _handle_ignore(reply, args_text, hist_chan=None, user_id=None):
+    """Handle .ignore command — add/remove/list/clear the ignore filter."""
+    await _handle_filter_command(
+        reply, args_text, IGNORED_EVENTS, "Ignore", "ignore",
+        invalidate_past=True, hist_chan=hist_chan, user_id=user_id,
+    )
 
 async def _handle_infoevent(reply, args_text, hist_chan=None, user_id=None):
     """Handle .infoevent command — add/remove/list/clear the info-event filter."""
-    args = args_text.strip()
-
-    if not args:
-        lines = [f"**Info-event list** ({len(INFO_EVENTS)} entries):"]
-        if INFO_EVENTS:
-            for entry in INFO_EVENTS:
-                lines.append(f"  • `{entry}`")
-        else:
-            lines.append("  *(empty)*")
-        lines.append("\nInfo events are shown to the AI but marked as informational.")
-        lines.append("Use `.infoevent <event>` to add, `.infoevent remove <event>` to remove, `.infoevent remove all` to clear.")
-        await reply("\n".join(lines))
-        return
-
-    if args.lower() == "remove all":
-        removed = _remove_all_filter(INFO_EVENTS)
-        _future_ctx_cache["ts"] = 0
-        if removed:
-            await reply(f"Removed {len(removed)} info-event entr{'y' if len(removed) == 1 else 'ies'}: {', '.join(f'`{r}`' for r in removed)}")
-        else:
-            await reply("No info-event entries to remove.")
-        return
-
-    if args.lower().startswith("remove ") or args.lower() == "remove":
-        raw = args[len("remove "):].strip()
-        if not raw:
-            await reply("Usage: `.infoevent remove <event>` or `.infoevent remove <event1>, <event2>`")
-            return
-        names = [n.strip() for n in raw.split(",") if n.strip()]
-        removed, not_found = _remove_from_filter(INFO_EVENTS, names)
-        _future_ctx_cache["ts"] = 0
-        parts = []
-        if removed:
-            parts.append(f"Removed: {', '.join(f'`{r}`' for r in removed)}")
-        if not_found:
-            parts.append(f"Not found: {', '.join(f'`{n}`' for n in not_found)}")
-        await reply(" | ".join(parts) if parts else "Nothing to remove.")
-        return
-
-    if args.lower() == "last":
-        last_reply = ""
-        if hist_chan is not None and user_id is not None:
-            history = _get_history(hist_chan, user_id)
-            if history:
-                last_reply = history[-1][1]
-        if not last_reply:
-            await reply("No previous bot reply found. Use `.infoevent <event name>` to add events directly.")
-            return
-        events = _extract_events_from_reply(last_reply)
-        if not events:
-            await reply("Couldn't extract event names from the last reply. Use `.infoevent <event name>` directly.")
-            return
-        added = _add_to_filter(INFO_EVENTS, events)
-        _future_ctx_cache["ts"] = 0
-        if added:
-            await reply(f"Added {len(added)} event(s) to info-event list: {', '.join(f'`{a}`' for a in added)}")
-        else:
-            await reply("All found events are already in the info-event list.")
-        return
-
-    names = [n.strip() for n in args.split(",") if n.strip()]
-    added = _add_to_filter(INFO_EVENTS, names)
-    _future_ctx_cache["ts"] = 0
-    if added:
-        await reply(f"Added {len(added)} event(s) to info-event list: {', '.join(f'`{a}`' for a in added)}")
-    else:
-        await reply("All provided events are already in the info-event list (or names were empty).")
+    await _handle_filter_command(
+        reply, args_text, INFO_EVENTS, "Info-event", "infoevent",
+        list_description="Info events are shown to the AI but marked as informational.",
+        hist_chan=hist_chan, user_id=user_id,
+    )
 
 # ── Slash commands ──
 
