@@ -168,7 +168,7 @@ NON_BLOCKING_EVENTS = _parse_event_list(_nb_raw)
 _runtime_ignored: list[str] = []
 _runtime_nonblocking: list[str] = []
 
-def _add_to_filter(target: list, runtime_target: list, names: list[str]) -> list[str]:
+def _add_to_filter(target: list[str], runtime_target: list[str], names: list[str]) -> list[str]:
     """Add normalized event names to a filter list, skipping duplicates. Returns added names."""
     added = []
     for name in names:
@@ -179,7 +179,7 @@ def _add_to_filter(target: list, runtime_target: list, names: list[str]) -> list
             added.append(norm)
     return added
 
-def _remove_runtime_filter(target: list, runtime_target: list) -> list[str]:
+def _remove_runtime_filter(target: list[str], runtime_target: list[str]) -> list[str]:
     """Remove all runtime-added entries from a filter list. Returns the removed names."""
     removed = list(runtime_target)
     for norm in removed:
@@ -188,7 +188,7 @@ def _remove_runtime_filter(target: list, runtime_target: list) -> list[str]:
     runtime_target.clear()
     return removed
 
-def _remove_from_filter(target: list, runtime_target: list, names: list[str]) -> tuple[list[str], list[str]]:
+def _remove_from_filter(target: list[str], runtime_target: list[str], names: list[str]) -> tuple[list[str], list[str]]:
     """Remove specific normalized event names from a filter list.
 
     Removes the entry from both the master list and, if present, the runtime list.
@@ -1005,7 +1005,6 @@ def ask_llm(question, calendar_context, include_past=False, history=None):
             print(f"[LLM] Ollama {reason} — falling back to Gemini ({get_gemini_model()})")
             _llm_backend = "gemini"
             return ask_gemini(question, calendar_context, history=history)
-        return _ERR_OLLAMA_TIMEOUT if is_timeout else _ERR_OLLAMA_OFFLINE
         return _ERR_OLLAMA_TIMEOUT if is_timeout else _ERR_OLLAMA_OFFLINE
     except Exception as e:
         print(f"LLM error: {e}")
