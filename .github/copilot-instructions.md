@@ -28,7 +28,7 @@ Healthy startup logs must include:
 
 ## Bot Commands
 
-All commands use `.` prefix (also registered as `/slash` commands). Smart-quote normalization for mobile keyboards.
+All commands use `.` prefix. Smart-quote normalization for mobile keyboards.
 
 | Command | Action |
 |---------|--------|
@@ -43,10 +43,6 @@ All commands use `.` prefix (also registered as `/slash` commands). Smart-quote 
 ## Demo Mode
 
 `.demo` injects synthetic calendars via `__demo_*` fake URLs stored directly in `_cal_cache`. `fetch_events()` has a guard: `url.startswith("__demo_")` returns cached data without HTTP fetch. Real calendars saved in `_demo_real_calendars`; `.demo off` restores them.
-
-## Slash Commands
-
-All `.` prefix commands are also registered as Discord slash commands (`/help`, `/llm`, `/cal`, `/ignore`, `/infoevent`, `/demo`, `/reboot`) via `discord.app_commands.CommandTree`. The tree syncs globally on first `on_ready` (may take ~1hr to appear in Discord). Both prefix and slash commands share the same handler functions (`_handle_help`, `_handle_llm_show`, `_handle_llm_switch`, `_handle_cal`, `_handle_ignore`, `_handle_infoevent`, `_handle_demo`, `_handle_reboot`).
 
 ## Test Suite
 

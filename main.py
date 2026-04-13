@@ -17,7 +17,6 @@ from typing import NamedTuple, Optional
 from collections import deque
 import apprise
 import discord
-from discord import app_commands
 import recurring_ical_events
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -1036,10 +1035,8 @@ _async_cleanup_conv_history = _make_async(_cleanup_conv_history)
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
-tree = app_commands.CommandTree(client)
 
 _scheduler_started = False
-_tree_synced = False
 _scheduler_lock = asyncio.Lock()
 _ready_at = None
 _demo_real_calendars = None  # saved real calendars when demo mode is active
@@ -1065,7 +1062,7 @@ def _configure_scheduler():
     scheduler.add_job(_async_cleanup_conv_history, "interval", minutes=10)
     return scheduler
 
-# ── Shared command handlers (used by both prefix and slash commands) ──
+# ── Shared command handlers ──
 
 _HELP_TEXT = (
     "**Scout Report** — Calendar Assistant\n\n"
@@ -1332,76 +1329,9 @@ async def _handle_infoevent(reply, args_text, hist_chan=None, user_id=None):
         short_cmd="ie",
     )
 
-# ── Slash commands ──
-
-@tree.command(name="help", description="Show available commands and tips")
-async def slash_help(interaction: discord.Interaction):
-    if DISCORD_ALLOWED_USERS and interaction.user.id not in DISCORD_ALLOWED_USERS:
-        await interaction.response.send_message("You are not authorized.", ephemeral=True)
-        return
-    await _handle_help(interaction.response.send_message)
-
-@tree.command(name="cal", description="List connected calendars")
-async def slash_cal(interaction: discord.Interaction):
-    if DISCORD_ALLOWED_USERS and interaction.user.id not in DISCORD_ALLOWED_USERS:
-        await interaction.response.send_message("You are not authorized.", ephemeral=True)
-        return
-    await _handle_cal(interaction.response.send_message)
-
-@tree.command(name="llm", description="Show or switch LLM backend")
-@app_commands.describe(choice="Backend: o (ollama), fl (flash-lite), gf (flash)")
-async def slash_llm(interaction: discord.Interaction, choice: str = None):
-    if DISCORD_ALLOWED_USERS and interaction.user.id not in DISCORD_ALLOWED_USERS:
-        await interaction.response.send_message("You are not authorized.", ephemeral=True)
-        return
-    if choice is None:
-        await _handle_llm_show(interaction.response.send_message)
-    else:
-        is_dm = interaction.guild is None
-        await _handle_llm_switch(
-            interaction.response.send_message, choice,
-            interaction.user.id, interaction.channel_id, is_dm,
-            str(interaction.user),
-        )
-
-@tree.command(name="demo", description="Toggle demo calendars (synthetic data)")
-@app_commands.describe(action="on or off (default: toggle)")
-async def slash_demo(interaction: discord.Interaction, action: str = ""):
-    if DISCORD_ALLOWED_USERS and interaction.user.id not in DISCORD_ALLOWED_USERS:
-        await interaction.response.send_message("You are not authorized.", ephemeral=True)
-        return
-    await _handle_demo(interaction.response.send_message, action.lower(), str(interaction.user))
-
-@tree.command(name="ignore", description="Add events to ignore list (hidden from AI)")
-@app_commands.describe(events="Event name(s), comma-separated. Use 'last' for last reply, 'clear' to reset, or blank to list.")
-async def slash_ignore(interaction: discord.Interaction, events: str = ""):
-    if DISCORD_ALLOWED_USERS and interaction.user.id not in DISCORD_ALLOWED_USERS:
-        await interaction.response.send_message("You are not authorized.", ephemeral=True)
-        return
-    is_dm = interaction.guild is None
-    hist_chan = interaction.user.id if is_dm else interaction.channel_id
-    await _handle_ignore(interaction.response.send_message, events, hist_chan, interaction.user.id)
-
-@tree.command(name="infoevent", description="Mark events as info-only (shown but tagged as informational)")
-@app_commands.describe(events="Event name(s), comma-separated. Use 'last' for last reply, 'remove all' to reset, or blank to list.")
-async def slash_infoevent(interaction: discord.Interaction, events: str = ""):
-    if DISCORD_ALLOWED_USERS and interaction.user.id not in DISCORD_ALLOWED_USERS:
-        await interaction.response.send_message("You are not authorized.", ephemeral=True)
-        return
-    is_dm = interaction.guild is None
-    hist_chan = interaction.user.id if is_dm else interaction.channel_id
-    await _handle_infoevent(interaction.response.send_message, events, hist_chan, interaction.user.id)
-
-@tree.command(name="reboot", description="Restart the bot process")
-async def slash_reboot(interaction: discord.Interaction):
-    if DISCORD_ALLOWED_USERS and interaction.user.id not in DISCORD_ALLOWED_USERS:
-        await interaction.response.send_message("You are not authorized.", ephemeral=True)
-        return
-    await _handle_reboot(interaction.response.send_message)
-
 @client.event
 async def on_ready():
-    global _scheduler_started, _tree_synced, _ready_at
+    global _scheduler_started, _ready_at
     _ready_at = datetime.now(TZ)
     print(f"Discord bot logged in as {client.user}")
     if DISCORD_ALLOWED_USERS:
@@ -1412,13 +1342,6 @@ async def on_ready():
             scheduler.start()
             _scheduler_started = True
             print("Scheduler started.")
-        if not _tree_synced:
-            try:
-                await tree.sync()
-                _tree_synced = True
-                print("Slash commands synced.")
-            except Exception as e:
-                print(f"Warning: Failed to sync slash commands: {e}")
 
 @client.event
 async def on_message(message):

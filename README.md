@@ -11,7 +11,7 @@ Runs as a Docker container with your choice of LLM backend.
 | **Weeknight digest** | Tomorrow's work events — configurable days/time (off by default, see SETUP.md to enable) |
 | **Weekend preview** | Fri–Sun events grouped by day — configurable day/time (off by default, see SETUP.md to enable) |
 | **Interactive chat** (Discord DM or channel) | Ask anything about your schedule — powered by Gemini or Ollama |
-| **Bot commands** | `.help`, `.cal`, `.llm`, `.ignore`, `.infoevent`, `.demo` — also available as `/slash` commands |
+| **Bot commands** | `.help`, `.cal`, `.llm`, `.ignore`, `.infoevent`, `.demo` |
 
 **Example questions you can ask the bot:**
 - "Am I free Tuesday afternoon?"
