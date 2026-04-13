@@ -41,4 +41,4 @@ services:
       DISCORD_TOKEN: ""
 
     volumes:
-      - ./data:/app/data
+      - /volume1/docker/scout-report/data:/app/data
