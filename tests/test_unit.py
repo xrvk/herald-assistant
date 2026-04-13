@@ -37,6 +37,11 @@ import main
 from main import (
     _format_duration,
     _parse_schedule,
+    _schedule_to_str,
+    _load_schedules,
+    _save_schedules,
+    _fmt_ampm,
+    _format_schedules_summary,
     Event,
     get_upcoming_events,
     format_events_for_notification,
@@ -352,4 +357,86 @@ class TestSendWeekendUpdate:
         send_weekend_update()
         title = mock_notify.call_args[0][0]
         assert "Weekend" in title
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  6. Schedule Persistence
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class TestScheduleToStr:
+    """Test _schedule_to_str helper."""
+
+    def test_none_returns_off(self):
+        assert _schedule_to_str(None) == "off"
+
+    def test_tuple_returns_formatted(self):
+        assert _schedule_to_str(("mon,tue", 14, 30)) == "mon,tue 14:30"
+
+    def test_roundtrip(self):
+        """schedule_to_str output can be parsed back by _parse_schedule."""
+        original = ("sun,mon,tue,wed,thu", 18, 0)
+        s = _schedule_to_str(original)
+        result = _parse_schedule(s, "mon", "08:00")
+        assert result == original
+
+
+class TestFmtAmpm:
+    """Test _fmt_ampm helper."""
+
+    def test_morning(self):
+        assert _fmt_ampm(9, 0) == "9:00 AM"
+
+    def test_afternoon(self):
+        assert _fmt_ampm(14, 30) == "2:30 PM"
+
+    def test_noon(self):
+        assert _fmt_ampm(12, 0) == "12:00 PM"
+
+    def test_midnight(self):
+        assert _fmt_ampm(0, 0) == "12:00 AM"
+
+
+class TestSchedulePersistence:
+    """Test _load_schedules / _save_schedules."""
+
+    def test_save_and_load(self, tmp_path):
+        """Save schedules to file and load them back."""
+        f = tmp_path / "schedules.json"
+        with patch("main._SCHEDULES_FILE", str(f)):
+            _save_schedules({"weeknight": "mon,tue 19:00", "weekend": "off"})
+            result = _load_schedules()
+        assert result == {"weeknight": "mon,tue 19:00", "weekend": "off"}
+
+    def test_load_missing_file(self, tmp_path):
+        """Loading from nonexistent file returns None."""
+        f = tmp_path / "nonexistent.json"
+        with patch("main._SCHEDULES_FILE", str(f)):
+            assert _load_schedules() is None
+
+    def test_load_corrupt_file(self, tmp_path):
+        """Loading from corrupt JSON returns None."""
+        f = tmp_path / "bad.json"
+        f.write_text("not json{{{")
+        with patch("main._SCHEDULES_FILE", str(f)):
+            assert _load_schedules() is None
+
+
+class TestFormatSchedulesSummary:
+    """Test _format_schedules_summary."""
+
+    def test_with_schedules(self):
+        with patch("main._weeknight", ("mon,tue", 18, 0)), \
+             patch("main._weekend", ("thu", 15, 0)), \
+             patch("main._noon_brief", None):
+            lines = _format_schedules_summary()
+        assert "Weeknight: mon,tue at 6:00 PM" in lines[0]
+        assert "Weekend: thu at 3:00 PM" in lines[1]
+        assert "Noon brief: off" in lines[2]
+
+    def test_all_off(self):
+        with patch("main._weeknight", None), \
+             patch("main._weekend", None), \
+             patch("main._noon_brief", None):
+            lines = _format_schedules_summary()
+        assert all("off" in l for l in lines)
 

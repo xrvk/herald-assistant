@@ -1,17 +1,34 @@
 # NAS Deployment Guide
 
-Deployment guide for running the calendar notification bot on a **Synology DS416play** (or any Synology NAS with DSM 7.x and Container Manager).
+Deployment guide for running the dual-mode calendar bot on a **Synology DS416play** (or any Synology NAS with DSM 7.x and Container Manager).
 
-The bot fetches your ICS calendar feeds on a schedule and sends notifications to a Discord channel (or any Apprise-supported service). No LLM, no Discord bot login — just cron-style calendar digests.
+The bot runs in two modes:
+- **Headless mode** (default): Fetches calendar feeds and sends scheduled notifications via Apprise
+- **Discord bot mode** (if `DISCORD_TOKEN` is set): Adds Discord bot commands (`.help`, `.cal`, `.schedule`) on top of scheduled notifications
+
+No LLM, no complex setup — just calendar data → cron → webhook notifications (+ optional Discord bot commands).
 
 ---
 
 ## Architecture
 
+**Headless mode (default):**
 ```
 ┌──────────────────────────┐
 │  Synology NAS (DS416play)│
 │  Docker: scout-report    │
+│  - APScheduler (cron)    │
+│  - calendar fetcher      │──HTTPS──> ICS calendar feeds
+│  - Apprise notifier      │──HTTPS──> Discord webhook
+└──────────────────────────┘
+```
+
+**Discord bot mode (optional):**
+```
+┌──────────────────────────┐
+│  Synology NAS (DS416play)│
+│  Docker: scout-report    │
+│  - Discord bot           │──HTTPS──> Discord API  
 │  - APScheduler (cron)    │
 │  - calendar fetcher      │──HTTPS──> ICS calendar feeds
 │  - Apprise notifier      │──HTTPS──> Discord webhook
@@ -45,7 +62,29 @@ You need at least one ICS calendar feed URL. Any provider that publishes `.ics` 
 
 ---
 
-## 2. Create a Discord Webhook
+## 2. Optional: Enable Discord Bot Mode
+
+Skip this section if you only want scheduled notifications (headless mode). If you want to use bot commands like `.help`, `.cal`, and `.schedule`, follow these steps:
+
+### Create a Discord Bot
+
+1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
+2. Click **New Application** → give it a name → **Create**
+3. Go to **Bot** tab → click **Add Bot** → **Yes** to confirm
+4. **Important:** Under **Privileged Gateway Intents**, enable **Message Content Intent**
+5. Click **Reset Token** → **Copy** the token (save this for step 4)
+
+### Add Bot to Your Server
+
+1. In Discord Developer Portal, go to **OAuth2** → **URL Generator**
+2. Select **Scopes:** `bot`
+3. Select **Bot Permissions:** `Send Messages`, `Read Message History`
+4. Copy the generated URL and open it in your browser
+5. Select your server and authorize the bot
+
+---
+
+## 3. Create a Discord Webhook
 
 Notifications are sent via a Discord webhook (no bot token needed).
 
@@ -58,7 +97,7 @@ Notifications are sent via a Discord webhook (no bot token needed).
 
 ---
 
-## 3. Deploy the Bot
+## 4. Deploy the Bot
 
 ### Prerequisites
 
@@ -79,6 +118,15 @@ scp -r "/path/to/scout-report" admin@NAS_IP:/volume1/docker/scout-report/
 ### Configure docker-compose.yaml
 
 Open `docker-compose.yaml` in **File Station** (right-click → **Open with Text Editor**) and fill in your values:
+
+#### Bot Token (Optional)
+
+```yaml
+# Remove this line entirely for headless mode
+DISCORD_TOKEN: "your_discord_bot_token_here"
+```
+
+Only include `DISCORD_TOKEN` if you want bot commands. Leave it out for notification-only mode.
 
 #### Calendars
 
@@ -109,13 +157,24 @@ NOON_SCHEDULE: "off"
 WORK_LABELS: "Work"
 ```
 
-- **`APPRISE_URL`** — Required. Your Discord webhook in Apprise format (see step 2).
+- **`APPRISE_URL`** — Required. Your Discord webhook in Apprise format (see step 3).
 - **`WEEKNIGHT_SCHEDULE`** — Tomorrow's work events. Default fires Sun–Thu at 8 PM.
 - **`WEEKEND_SCHEDULE`** — Fri–Sun preview. Default fires Thursday at 4 PM.
 - **`NOON_SCHEDULE`** — Midday brief (only fires if tomorrow has work events). Off by default.
 - **`WORK_LABELS`** — Must match a `CALENDAR_N_LABEL` value. Controls which calendars appear in weeknight + noon digests. Weekend preview shows all calendars.
 
 At least one schedule must be enabled.
+
+#### Data Persistence (for Discord bot mode)
+
+The data volume persists schedule changes made via `.schedule` commands:
+
+```yaml
+volumes:
+  - ./data:/app/data  # Required for schedule persistence
+```
+
+This directory is automatically created and contains `schedules.json` with any schedule overrides.
 
 #### Minimum required values
 
@@ -150,6 +209,7 @@ docker compose logs -f scout-report
 
 You should see:
 
+**Headless mode:**
 ```
 Loaded 2 calendar(s): Personal, Work
   Work calendars: Work
@@ -161,8 +221,25 @@ Loaded 2 calendar(s): Personal, Work
   Weeknight digest: sun,mon,tue,wed,thu at 20:00
   Weekend preview: thu at 16:00
 Starting scheduler...
-Scout Report started. Scheduler running.
+Scout Report started. Scheduler running (headless mode).
 ```
+
+**Discord bot mode:**
+```
+Loaded 2 calendar(s): Personal, Work
+  Work calendars: Work
+  Personal calendars: Personal
+────────────────────────────────────────
+  Notifications: enabled
+  Timezone: America/New_York
+────────────────────────────────────────
+  Weeknight digest: sun,mon,tue,wed,thu at 20:00
+  Weekend preview: thu at 16:00
+Discord bot logged in as ScoutBot#1234
+Scheduler started.
+```
+
+Both modes send a startup notification to your configured `APPRISE_URL`.
 
 ### Auto-Restart on Reboot
 
@@ -182,7 +259,23 @@ Rebuild in Container Manager (**Action → Build** then **Action → Start**), w
 
 ---
 
-## 5. Troubleshooting
+## 5. Bot Commands (Discord Mode Only)
+
+If you configured `DISCORD_TOKEN`, the bot responds to these commands in Discord:
+
+| Command | Description |
+|---|---|
+| `.help` | Show available commands |
+| `.cal` | List connected calendars |
+| `.schedule` | View current digest schedules |
+| `.schedule <type> <days> <HH:MM>` | Update a schedule (e.g. `.schedule weeknight mon,tue,wed 19:30`) |
+| `.schedule <type> off` | Disable a schedule (e.g. `.schedule weekend off`) |
+
+Schedule types: `weeknight`, `noon`, `weekend`. Changes are persisted to `data/schedules.json` and take effect immediately.
+
+---
+
+## 6. Troubleshooting
 
 | Problem | Solution |
 |---|---|
@@ -194,7 +287,7 @@ Rebuild in Container Manager (**Action → Build** then **Action → Start**), w
 
 ---
 
-## 6. DS416play Notes
+## 7. DS416play Notes
 
 - **CPU:** Intel Atom CE5335 (x86_64) — standard Docker images work, no ARM compatibility issues
 - **RAM:** 512 MB — the bot uses ~60 MB, well within limits (container capped at 256 MB)
@@ -203,7 +296,7 @@ Rebuild in Container Manager (**Action → Build** then **Action → Start**), w
 
 ---
 
-## 7. Schedule Reference
+## 8. Schedule Reference
 
 | Schedule | What it sends | Default timing |
 |---|---|---|
@@ -212,104 +305,6 @@ Rebuild in Container Manager (**Action → Build** then **Action → Start**), w
 | `WEEKEND_SCHEDULE` | Fri/Sat/Sun events from all calendars, grouped by day | Thu at 16:00 |
 
 Format: `"days HH:MM"` — days are comma-separated APScheduler names (`mon,tue,wed,thu,fri,sat,sun`). Use `"off"` to disable.
-# NAS Deployment Guide
-
-Deployment guide for running the bot container 24/7 on a **Synology NAS** (DSM 7.x with Container Manager).
-
-The recommended setup uses **Gemini** (Google's cloud LLM) — just an API key, no GPU, no second machine. If you prefer fully local/private inference, see [Appendix: Ollama on MacBook](#appendix-ollama-on-macbook-optional) at the bottom.
-
-| | Gemini (Recommended) | Ollama (Optional) |
-|---|---|---|
-| **Setup** | Just an API key | Second machine on LAN |
-| **Cost** | Free tier (~5 RPM) | Free, fully local |
-| **Privacy** | Queries go to Google | Everything stays on your network |
-| **Hardware** | NAS only | NAS + MacBook (or similar) |
-
----
-
-## Architecture
-
-```
-┌──────────────────────────┐
-│  Synology NAS            │
-│  Docker: scout-report     │──HTTPS──> Gemini API (cloud)
-│  - cron scheduler        │
-│  - discord bot           │
-│  - calendar fetcher      │
-└──────────┬───────────────┘
-           │
-           ▼
-      Discord API
-```
-
-The NAS handles everything. LLM queries go to Google's Gemini API over the internet. No second machine required.
-
-Scheduled notifications (weeknight/weekend) don't need the LLM at all — they only format calendar data and send via [Apprise](https://github.com/caronc/apprise) (requires `APPRISE_URL` set in `docker-compose.yaml`).
-
----
-
-## 1. Deploy the Bot
-
-### Prerequisites
-
-- **Container Manager** installed from **Package Center** (called "Docker" on DSM 6.x)
-- Bot files copied to a shared folder on the NAS (e.g. `/docker/scout-report/`)
-
-### Copy Files to NAS
-
-Copy the project folder to your NAS via **File Station** (drag and drop), SMB share, or SCP:
-
-```bash
-# SMB (from your Mac, if the NAS share is mounted)
-cp -r "/path/to/scout-report" /Volumes/your-nas-share/docker/scout-report/
-
-# Or SCP
-scp -r "/path/to/scout-report" admin@NAS_IP:/volume1/docker/scout-report/
-```
-
-### Configure docker-compose.yaml
-
-The project ships a ready-made NAS configuration file — `docker-compose.nas.yaml` — with all settings inline. No separate `.env` file needed.
-
-**Step 1 — Rename the NAS config file**
-
-In **File Station**, navigate to the project folder, right-click `docker-compose.nas.yaml`, and rename it to `docker-compose.yaml`. (This replaces the development version — that's intentional. If you want to keep the original for reference, copy it first.)
-
-> **Via SSH instead:** `mv docker-compose.nas.yaml docker-compose.yaml`
-
-**Step 2 — Fill in your values**
-
-Right-click `docker-compose.yaml` → **Open with Text Editor** and replace the placeholder strings with your actual values. The file is organised into labelled sections:
-
-#### Calendars (at least one required)
-
-Use numbered slots. Any ICS URL works — iCloud, Outlook, Google, etc. See [SETUP.md Step 1](SETUP.md#1-get-calendar-urls) for how to get these URLs.
-
-```yaml
-CALENDAR_1_URL: "webcal://p60-caldav.icloud.com/published/2/YOUR_ID"
-CALENDAR_1_LABEL: "Personal"
-# CALENDAR_2_URL: "https://outlook.office365.com/owa/calendar/YOUR_ID/calendar.ics"
-# CALENDAR_2_LABEL: "Work"
-```
-
-Up to 9 numbered slots (`CALENDAR_1` through `CALENDAR_9`). Labels are your choice — they appear in digests, LLM context, and `WORK_LABELS` matching.
-
-#### Discord Bot (required for interactive chat)
-
-See [SETUP.md Step 2](SETUP.md#2-create-a-discord-bot) for creating the bot and getting these values.
-
-```yaml
-DISCORD_BOT_TOKEN: "your-discord-bot-token-here"
-DISCORD_CHANNEL_ID: "your-channel-id-here"
-```
-
-Omit `DISCORD_CHANNEL_ID` for DM-only mode. Omit `DISCORD_BOT_TOKEN` entirely for notification-only mode (requires `APPRISE_URL` + a schedule below).
-
-#### LLM Backend
-
-```yaml
-LLM_BACKEND: "gemini"
-GEMINI_API_KEY: "your-gemini-api-key-here"
 ```
 
 Get a free key from [Google AI Studio](https://aistudio.google.com/app/apikey). `LLM_BACKEND` already defaults to `gemini`, so you only need the API key.

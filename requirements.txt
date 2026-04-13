@@ -1,3 +1,4 @@
+discord.py>=2.3,<3
 requests>=2.33,<3
 icalendar>=7.0,<8
 recurring-ical-events>=3.8,<4

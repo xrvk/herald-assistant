@@ -5,9 +5,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-RUN useradd --create-home appuser
-
 COPY main.py .
+RUN chmod 644 main.py
 
-USER appuser
+RUN mkdir -p /app/data
+
 CMD ["python", "-u", "main.py"]

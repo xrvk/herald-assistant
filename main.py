@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import asyncio
 import atexit
 import signal
@@ -75,23 +76,55 @@ def _parse_schedule(raw, default_days, default_time):
         raise ValueError(f"Invalid time: {h:02d}:{m:02d} — hour must be 0-23, minute 0-59")
     return (days.strip(), h, m)
 
-# Weeknight digest: tomorrow's work events (off unless configured)
+def _schedule_to_str(sched):
+    """Convert (days, hour, minute) tuple to 'days HH:MM' string, or 'off' if None."""
+    if sched is None:
+        return "off"
+    return f"{sched[0]} {sched[1]:02d}:{sched[2]:02d}"
+
+# ── Schedule persistence ──
+_SCHEDULES_FILE = os.getenv("SCHEDULES_PATH", os.path.join(os.path.dirname(__file__) or ".", "data", "schedules.json"))
+
+def _load_schedules():
+    """Load schedule overrides from JSON file. Returns dict or None."""
+    try:
+        with open(_SCHEDULES_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+def _save_schedules(data):
+    """Save schedule overrides to JSON file."""
+    os.makedirs(os.path.dirname(_SCHEDULES_FILE) or ".", exist_ok=True)
+    with open(_SCHEDULES_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+# Parse env var defaults
 try:
     _weeknight = _parse_schedule(os.getenv("WEEKNIGHT_SCHEDULE", "off"), "sun,mon,tue,wed,thu", "20:00")
 except (ValueError, IndexError) as e:
     raise RuntimeError(f"Invalid WEEKNIGHT_SCHEDULE: {os.getenv('WEEKNIGHT_SCHEDULE')!r} — {e}") from e
 
-# Weekend preview: Fri-Sun events (off unless configured)
 try:
     _weekend = _parse_schedule(os.getenv("WEEKEND_SCHEDULE", "off"), "thu", "16:00")
 except (ValueError, IndexError) as e:
     raise RuntimeError(f"Invalid WEEKEND_SCHEDULE: {os.getenv('WEEKEND_SCHEDULE')!r} — {e}") from e
 
-# Noon brief: tomorrow's work events at midday, only notifies if events exist
 try:
     _noon_brief = _parse_schedule(os.getenv("NOON_SCHEDULE", "off"), "sun,mon,tue,wed,thu", "12:00")
 except (ValueError, IndexError) as e:
     raise RuntimeError(f"Invalid NOON_SCHEDULE: {os.getenv('NOON_SCHEDULE')!r} — {e}") from e
+
+# Overlay with persisted schedule overrides (from .schedule commands)
+_saved = _load_schedules()
+if _saved:
+    print("Loaded schedule overrides from schedules.json")
+    if "weeknight" in _saved:
+        _weeknight = _parse_schedule(_saved["weeknight"], "sun,mon,tue,wed,thu", "20:00")
+    if "weekend" in _saved:
+        _weekend = _parse_schedule(_saved["weekend"], "thu", "16:00")
+    if "noon" in _saved:
+        _noon_brief = _parse_schedule(_saved["noon"], "sun,mon,tue,wed,thu", "12:00")
 
 # At least one schedule must be enabled (this is a notification-only bot)
 _schedules_enabled = _weeknight is not None or _weekend is not None or _noon_brief is not None
@@ -365,22 +398,55 @@ _async_send_work_update = _make_async(send_work_update)
 _async_send_noon_brief = _make_async(send_noon_brief)
 _async_send_weekend_update = _make_async(send_weekend_update)
 
+def _fmt_ampm(h, m):
+    """Format hour/minute as 12-hour AM/PM string."""
+    period = "AM" if h < 12 else "PM"
+    h12 = h % 12 or 12
+    return f"{h12}:{m:02d} {period}"
+
+_scheduler = None  # global reference for rebuild
+
 def _configure_scheduler():
     """Create and configure the APScheduler instance with digest jobs."""
     scheduler = AsyncIOScheduler(timezone=TZ)
     if _weeknight:
         days, h, m = _weeknight
         scheduler.add_job(_async_send_work_update, "cron", day_of_week=days, hour=h, minute=m)
-        print(f"  Weeknight digest: {days} at {h:02d}:{m:02d}")
+        print(f"  Weeknight digest: {days} at {_fmt_ampm(h, m)}")
     if _noon_brief:
         days, h, m = _noon_brief
         scheduler.add_job(_async_send_noon_brief, "cron", day_of_week=days, hour=h, minute=m)
-        print(f"  Noon brief: {days} at {h:02d}:{m:02d}")
+        print(f"  Noon brief: {days} at {_fmt_ampm(h, m)}")
     if _weekend:
         days, h, m = _weekend
         scheduler.add_job(_async_send_weekend_update, "cron", day_of_week=days, hour=h, minute=m)
-        print(f"  Weekend preview: {days} at {h:02d}:{m:02d}")
+        print(f"  Weekend preview: {days} at {_fmt_ampm(h, m)}")
     return scheduler
+
+def _rebuild_scheduler():
+    """Stop current scheduler and start a new one with updated schedules."""
+    global _scheduler
+    if _scheduler and _scheduler.running:
+        _scheduler.shutdown(wait=False)
+    _scheduler = _configure_scheduler()
+    _scheduler.start()
+
+def _format_schedules_summary():
+    """Build a summary of current schedules for display."""
+    lines = []
+    if _weeknight:
+        lines.append(f"Weeknight: {_weeknight[0]} at {_fmt_ampm(_weeknight[1], _weeknight[2])}")
+    else:
+        lines.append("Weeknight: off")
+    if _weekend:
+        lines.append(f"Weekend: {_weekend[0]} at {_fmt_ampm(_weekend[1], _weekend[2])}")
+    else:
+        lines.append("Weekend: off")
+    if _noon_brief:
+        lines.append(f"Noon brief: {_noon_brief[0]} at {_fmt_ampm(_noon_brief[1], _noon_brief[2])}")
+    else:
+        lines.append("Noon brief: off")
+    return lines
 
 # ── Graceful shutdown ──
 
@@ -393,20 +459,151 @@ atexit.register(_shutdown)
 
 # ── Main entry point ──
 
-async def run_scheduler_only():
-    """Run the scheduler for cron-based calendar notifications."""
-    loop = asyncio.get_running_loop()
-    scheduler = _configure_scheduler()
-    scheduler.start()
-    print("Scout Report started. Scheduler running.")
+def _startup_message():
+    """Build startup notification body."""
+    _cal_names = ", ".join(label for label, _ in CALENDARS)
+    lines = _format_schedules_summary()
+    return (
+        f"**Scout Report started** ✅\n"
+        f"Calendars: {_cal_names}\n"
+        f"Timezone: {TZ.key}\n"
+        + "\n".join(lines)
+    )
 
-    stop = asyncio.Event()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stop.set)
-    await stop.wait()
-    scheduler.shutdown(wait=False)
-    print("[Shutdown] Scheduler stopped.")
+# ── Discord bot mode ──
+_DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
+
+def _normalize_quotes(text):
+    """Normalize smart quotes to ASCII for mobile keyboard compat."""
+    return text.replace("\u2018", "'").replace("\u2019", "'").replace("\u201c", '"').replace("\u201d", '"')
+
+if _DISCORD_TOKEN:
+    import discord
+
+    intents = discord.Intents.default()
+    intents.message_content = True
+    client = discord.Client(intents=intents)
+
+    @client.event
+    async def on_ready():
+        global _scheduler
+        _scheduler = _configure_scheduler()
+        _scheduler.start()
+        print(f"Discord bot logged in as {client.user}")
+        print("Scheduler started.")
+        apobj.notify(body=_startup_message(), title="", notify_type="info")
+
+    @client.event
+    async def on_message(message):
+        if message.author == client.user or message.author.bot:
+            return
+
+        content = _normalize_quotes(message.content.strip())
+        if not content.startswith("."):
+            return
+
+        cmd = content.lower().split()[0]
+        args = content[len(cmd):].strip()
+
+        if cmd == ".help":
+            await message.channel.send(
+                "**Scout Report Commands**\n"
+                "`.help` — Show this help\n"
+                "`.cal` — List connected calendars\n"
+                "`.schedule` — Show current digest schedules\n"
+                "`.schedule <type> <days> <HH:MM>` — Update a schedule\n"
+                "`.schedule <type> off` — Disable a schedule\n"
+                "\n"
+                "**Schedule types:** `weeknight`, `weekend`, `noon`\n"
+                "**Example:** `.schedule weeknight mon,tue,wed,thu 19:00`"
+            )
+
+        elif cmd == ".cal":
+            cal_lines = []
+            for label, _ in CALENDARS:
+                tag = " (work)" if label in WORK_LABELS else ""
+                cal_lines.append(f"• {label}{tag}")
+            await message.channel.send(
+                f"**Connected Calendars ({len(CALENDARS)})**\n" + "\n".join(cal_lines)
+            )
+
+        elif cmd == ".schedule":
+            global _weeknight, _weekend, _noon_brief
+            if not args:
+                # Show current schedules
+                lines = _format_schedules_summary()
+                await message.channel.send("**Current Schedules**\n" + "\n".join(lines))
+                return
+
+            parts = args.split(None, 1)
+            sched_type = parts[0].lower()
+            sched_value = parts[1] if len(parts) > 1 else ""
+
+            if sched_type not in ("weeknight", "weekend", "noon"):
+                await message.channel.send(
+                    f"Unknown schedule type `{sched_type}`. Use: `weeknight`, `weekend`, or `noon`."
+                )
+                return
+
+            defaults = {
+                "weeknight": ("sun,mon,tue,wed,thu", "20:00"),
+                "weekend": ("thu", "16:00"),
+                "noon": ("sun,mon,tue,wed,thu", "12:00"),
+            }
+
+            try:
+                new_sched = _parse_schedule(sched_value or "off", *defaults[sched_type])
+            except (ValueError, IndexError) as e:
+                await message.channel.send(f"Invalid schedule: {e}")
+                return
+
+            # Update in-memory schedule
+            if sched_type == "weeknight":
+                _weeknight = new_sched
+            elif sched_type == "weekend":
+                _weekend = new_sched
+            elif sched_type == "noon":
+                _noon_brief = new_sched
+
+            # Persist to file
+            saved = _load_schedules() or {}
+            saved[sched_type] = _schedule_to_str(new_sched)
+            _save_schedules(saved)
+
+            # Rebuild scheduler
+            _rebuild_scheduler()
+
+            if new_sched:
+                confirm = f"✅ {sched_type.title()} schedule updated: {new_sched[0]} at {_fmt_ampm(new_sched[1], new_sched[2])}"
+            else:
+                confirm = f"✅ {sched_type.title()} schedule disabled."
+            await message.channel.send(confirm)
+
+    def run():
+        print("Starting Discord bot...")
+        client.run(_DISCORD_TOKEN, log_handler=None)
+
+else:
+    # ── Headless scheduler-only mode ──
+    async def run_scheduler_only():
+        """Run the scheduler for cron-based calendar notifications (no Discord bot)."""
+        global _scheduler
+        loop = asyncio.get_running_loop()
+        _scheduler = _configure_scheduler()
+        _scheduler.start()
+        print("Scout Report started. Scheduler running (headless mode).")
+        apobj.notify(body=_startup_message(), title="", notify_type="info")
+
+        stop = asyncio.Event()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, stop.set)
+        await stop.wait()
+        _scheduler.shutdown(wait=False)
+        print("[Shutdown] Scheduler stopped.")
+
+    def run():
+        print("Starting scheduler (no DISCORD_TOKEN — headless mode)...")
+        asyncio.run(run_scheduler_only())
 
 if __name__ == "__main__":
-    print("Starting scheduler...")
-    asyncio.run(run_scheduler_only())
+    run()

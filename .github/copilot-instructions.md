@@ -1,16 +1,32 @@
 # Scout Report
 
-Single-file Python calendar notification bot (`main.py`). ICS calendar aggregation + scheduled digests via Apprise. Docker-deployed on Synology NAS.
+Single-file Python dual-mode bot (`main.py`, ~610 lines). ICS calendar aggregation + scheduled digests via Apprise. Optional Discord bot commands. Docker-deployed.
 
 ## Stack
 
-Python 3.11 (Docker). Deps: APScheduler, Apprise, icalendar, recurring-ical-events, requests. All config via env vars in `docker-compose.yaml`.
+Python 3.11 (Docker). Deps: discord.py, APScheduler, Apprise, icalendar, recurring-ical-events, requests. All config via env vars in `docker-compose.yaml`.
 
 ## Architecture
 
-Headless scheduler — no Discord bot, no LLM. Fetches ICS calendar feeds on cron schedules and sends formatted digest notifications via Apprise (Discord webhooks, etc.).
+Dual-mode: `DISCORD_TOKEN` present → discord.Client bot + cron scheduler; absent → headless AsyncIOScheduler only. No LLM. No demo mode. No conversation history.
 
-Entry point: `run_scheduler_only()` — async event loop with APScheduler + SIGTERM/SIGINT handling.
+Entry point: `run()` — either `client.run()` (bot mode) or `asyncio.run(run_scheduler_only())` (headless).
+
+## Bot Commands
+
+Discord mode only. Smart-quote normalization via `_normalize_quotes()` for mobile keyboards.
+
+| Command | Action |
+|---------|--------|
+| `.help` | Show available commands |
+| `.cal` | List connected calendars |
+| `.schedule` | View current digest schedules |
+| `.schedule <type> <days> <HH:MM>` | Update a schedule (e.g. `.schedule weeknight mon,tue,wed 19:30`) |
+| `.schedule <type> off` | Disable a schedule (e.g. `.schedule weekend off`) |
+
+## Schedule Persistence
+
+Env vars = defaults, `data/schedules.json` = overrides, `_rebuild_scheduler()` for hot-reload. `docker-compose.yaml` has `volumes: - ./data:/app/data` for persistence. `Dockerfile` has `RUN mkdir -p /app/data`.
 
 ## Scheduled Digests
 
@@ -24,9 +40,16 @@ Three digest types, all configurable via `"days HH:MM"` format or `"off"`:
 
 At least one schedule must be enabled (notification-only bot).
 
+## Startup Requirements
+
+- Discord bot mode requires Message Content Intent enabled in Discord Developer Portal
+- Startup sends notification to Apprise in both modes
+- Healthy startup logs in bot mode: "Discord bot logged in as ..." + "Scheduler started."
+- Healthy startup logs in headless: "Scout Report started. Scheduler running (headless mode)."
+
 ## Test Suite
 
-- `tests/test_unit.py` — unit tests, no network needed. Run: `pytest tests/test_unit.py -v`
+- `tests/test_unit.py` — 40 unit tests, no network needed. Run: `pytest tests/test_unit.py -v`
 - `run_tests.sh` — runner: `./run_tests.sh`
 
 ## Rules
@@ -39,72 +62,4 @@ At least one schedule must be enabled (notification-only bot).
 - Startup prints a summary banner (calendars, schedules, timezone).
 - Timeouts: calendar fetch 30s (with 1 retry + 2s backoff on transient errors).
 - Cache TTL in seconds (default 3600).
-- Graceful shutdown: `atexit` cleans up `_cal_executor`; `run_scheduler_only()` handles SIGTERM/SIGINT.
-# Scout Report
-
-Single-file Python Discord bot (`main.py`). ICS calendar aggregation + LLM Q&A + scheduled digests. Docker-deployed.
-
-## Stack
-
-Python 3.11 (Docker) / 3.13 (local). Deps: discord.py, APScheduler, Apprise, icalendar, recurring-ical-events, google-genai. All config via env vars (no dotenv).
-
-## LLM Backends
-
-Ollama (local) or Gemini (cloud) via `LLM_BACKEND` env var. `get_backend()`/`set_backend()` for runtime state. `_get_gemini_client()` is lazy-init. Gemini free tier: ~5 RPM with retry/backoff.
-
-## Conversation History
-
-Per-user/channel in-memory history (`_conv_history` dict of deques). `_get_history()`/`_store_exchange()` helpers. Bot answers truncated to 500 chars before storage. TTL-based staleness (`CONV_HISTORY_TTL`, default 30 min). Ollama: `num_ctx` bumped by `CONV_HISTORY_CTX_BUMP` (default 4096) only when history overflows base window (avoids KV cache reload penalty); oldest exchanges dropped first if token budget exceeded. Gemini: history passed as `types.Content` list, no token concerns. `.llm <choice>` clears history. DMs keyed by `author.id` (not channel ID).
-
-## Bot Process Management
-
-Local reboot (single command — kill, wait, restart):
-
-```bash
-pkill -9 -f "python3 main.py" 2>/dev/null; pkill -9 -f "Python main.py" 2>/dev/null; sleep 0.5; cd /Users/victor/Projects/Personal\ Context && set -a && source .env && set +a && export OLLAMA_URL=http://localhost:11434 && .venv/bin/python3 main.py
-```
-
-Healthy startup logs must include:
-- `Discord bot logged in as ...`
-- `Scheduler started.`
-
-## Bot Commands
-
-All commands use `.` prefix. Smart-quote normalization for mobile keyboards.
-
-| Command | Action |
-|---------|--------|
-| `.help` | Show available commands and example questions |
-| `.llm` | Show current backend + models |
-| `.llm [g\|o\|fl\|gf]` | Switch backend/model |
-| `.cal` | List connected calendars |
-| `.ignore` / `.infoevent` | Manage event filters. `add <pattern>` / `remove <pattern>` / `remove all` / (no args = list) |
-| `.demo` / `.demo off` | Activate/deactivate synthetic demo calendars from `demo/calendars.py` |
-| `.reboot` | Restart the bot process (`os.execv` self-restart; Docker `restart: always` as fallback) |
-
-## Demo Mode
-
-`.demo` injects synthetic calendars via `__demo_*` fake URLs stored directly in `_cal_cache`. `fetch_events()` has a guard: `url.startswith("__demo_")` returns cached data without HTTP fetch. Real calendars saved in `_demo_real_calendars`; `.demo off` restores them.
-
-## Test Suite
-
-- `tests/test_unit.py` — 145 unit tests, no bot/network needed. Run: `pytest tests/test_unit.py -v`
-- `tests/test_integration.py` — live Discord integration tests (needs running bot + `.env`)
-- `tests/demo_calendars.py` — synthetic calendar generators (`generate_work_ics()`, `generate_personal_ics()`, `calendar_stats()`)
-- `run_tests.sh` — runner: `./run_tests.sh` (unit only), `./run_tests.sh --live` (unit + integration)
-
-## Rules
-
-- Never log full calendar URLs (contain auth tokens). Use `_cal_labels`.
-- `.env` is git-ignored with secrets. `.env.example` documents all vars.
-- Syntax check: `python3 -c "import ast; ast.parse(open('main.py').read())"`
-- Build: `docker compose up -d --build`
-- `google-genai` is imported lazily inside `_get_gemini_client()`, not at module top — missing package won't error until Gemini is actually used.
-- Discord replies truncated at 1900 chars (2000 limit). Scheduled digests require `APPRISE_URL`.
-- `HISTORY_DAYS=0` disables past-event classification entirely. Cache TTLs are in seconds (default 3600).
-- At least one calendar URL must be configured or startup crashes.
-- Startup prints a summary banner (LLM backend, calendars, schedules, history config).
-- Timeouts are hard-coded: calendar fetch 30s (with 1 retry + 2s backoff on transient errors), Ollama chat 120s, classification 15s.
-- `MAX_OUTPUT_TOKENS` configurable via env var (default 512).
-- Event filters persisted in `filters.json`. `IGNORED_EVENTS`/`INFO_EVENTS` env vars are optional seeds merged at startup. Info events are visible to AI but tagged as informational.
 - Graceful shutdown: `atexit` cleans up `_cal_executor`; `run_scheduler_only()` handles SIGTERM/SIGINT.
