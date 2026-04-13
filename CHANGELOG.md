@@ -4,6 +4,32 @@ All notable changes to Scout Report are documented here.
 
 ---
 
+## [nas-cron-only] - 2026-04-12
+
+### Branch: `nas-cron-only`
+
+Simplified fork for headless NAS deployment (Synology DS416play). Stripped down to a pure calendar cron notification bot.
+
+### Removed
+
+- **Discord bot** — No bot login, no interactive commands, no `DISCORD_BOT_TOKEN` needed
+- **LLM integration** — No Ollama, no Gemini, no `google-genai` or `discord.py` dependencies
+- **Event filters** — No `.ignore` / `.infoevent`, no `filters.json`, no `IGNORED_EVENTS` / `INFO_EVENTS`
+- **Demo mode** — No `.demo` command, no `demo/` directory
+- **Conversation history** — No per-user chat state
+- **Interactive commands** — No `.help`, `.cal`, `.llm`, `.reboot`
+
+### Changed
+
+- **Entry point** — Always runs `run_scheduler_only()` (no Discord conditional)
+- **Schedules required** — At least one schedule must be enabled (notification-only bot)
+- **`APPRISE_URL` required** — Bot won't start without it
+- **Single `docker-compose.yaml`** — NAS-focused config with all settings inline (no `.env` file)
+- **Dockerfile** — Removed `demo/` directory and data volume mount
+- **Documentation** — `NAS-DUAL-SETUP.md` rewritten for notification-only DS416play deployment
+
+---
+
 ## [v2.6] - 2026-04-11
 
 ### Changed

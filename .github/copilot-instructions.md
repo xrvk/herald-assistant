@@ -1,5 +1,47 @@
 # Scout Report
 
+Single-file Python calendar notification bot (`main.py`). ICS calendar aggregation + scheduled digests via Apprise. Docker-deployed on Synology NAS.
+
+## Stack
+
+Python 3.11 (Docker). Deps: APScheduler, Apprise, icalendar, recurring-ical-events, requests. All config via env vars in `docker-compose.yaml`.
+
+## Architecture
+
+Headless scheduler — no Discord bot, no LLM. Fetches ICS calendar feeds on cron schedules and sends formatted digest notifications via Apprise (Discord webhooks, etc.).
+
+Entry point: `run_scheduler_only()` — async event loop with APScheduler + SIGTERM/SIGINT handling.
+
+## Scheduled Digests
+
+Three digest types, all configurable via `"days HH:MM"` format or `"off"`:
+
+| Digest | Env Var | Default | Description |
+|--------|---------|---------|-------------|
+| Weeknight | `WEEKNIGHT_SCHEDULE` | `off` | Tomorrow's work events (filtered by `WORK_LABELS`) |
+| Noon brief | `NOON_SCHEDULE` | `off` | Tomorrow's work events — only fires if events exist |
+| Weekend preview | `WEEKEND_SCHEDULE` | `off` | Fri–Sun events grouped by day |
+
+At least one schedule must be enabled (notification-only bot).
+
+## Test Suite
+
+- `tests/test_unit.py` — unit tests, no network needed. Run: `pytest tests/test_unit.py -v`
+- `run_tests.sh` — runner: `./run_tests.sh`
+
+## Rules
+
+- Never log full calendar URLs (contain auth tokens). Use `_cal_labels`.
+- Syntax check: `python3 -c "import ast; ast.parse(open('main.py').read())"`
+- Build: `docker compose up -d --build`
+- At least one calendar URL must be configured or startup crashes.
+- At least one schedule + `APPRISE_URL` must be configured or startup crashes.
+- Startup prints a summary banner (calendars, schedules, timezone).
+- Timeouts: calendar fetch 30s (with 1 retry + 2s backoff on transient errors).
+- Cache TTL in seconds (default 3600).
+- Graceful shutdown: `atexit` cleans up `_cal_executor`; `run_scheduler_only()` handles SIGTERM/SIGINT.
+# Scout Report
+
 Single-file Python Discord bot (`main.py`). ICS calendar aggregation + LLM Q&A + scheduled digests. Docker-deployed.
 
 ## Stack

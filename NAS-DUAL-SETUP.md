@@ -1,5 +1,219 @@
 # NAS Deployment Guide
 
+Deployment guide for running the calendar notification bot on a **Synology DS416play** (or any Synology NAS with DSM 7.x and Container Manager).
+
+The bot fetches your ICS calendar feeds on a schedule and sends notifications to a Discord channel (or any Apprise-supported service). No LLM, no Discord bot login — just cron-style calendar digests.
+
+---
+
+## Architecture
+
+```
+┌──────────────────────────┐
+│  Synology NAS (DS416play)│
+│  Docker: scout-report    │
+│  - APScheduler (cron)    │
+│  - calendar fetcher      │──HTTPS──> ICS calendar feeds
+│  - Apprise notifier      │──HTTPS──> Discord webhook
+└──────────────────────────┘
+```
+
+---
+
+## 1. Get Calendar URLs
+
+You need at least one ICS calendar feed URL. Any provider that publishes `.ics` works.
+
+### iCloud
+
+1. Open **Calendar** on your Mac
+2. Right-click a calendar → **Share Calendar…** → toggle **Public Calendar**
+3. Click **Share Link** → copy the `webcal://` URL
+4. The bot auto-converts `webcal://` → `https://`
+
+### Google Calendar
+
+1. Open [Google Calendar](https://calendar.google.com) → Settings (gear icon)
+2. Select a calendar → scroll to **Integrate calendar**
+3. Copy **Secret address in iCal format** (the one with `/private-…/basic.ics`)
+
+### Outlook / Microsoft 365
+
+1. Open [Outlook Calendar](https://outlook.office.com/calendar) → Settings → **Shared calendars**
+2. Under **Publish a calendar** → select a calendar → permissions: **Can view all details**
+3. Click **Publish** → copy the **ICS** link
+
+---
+
+## 2. Create a Discord Webhook
+
+Notifications are sent via a Discord webhook (no bot token needed).
+
+1. Open your Discord server → **Server Settings → Integrations → Webhooks**
+2. Click **New Webhook** → choose a channel → **Copy Webhook URL**
+3. The URL looks like: `https://discord.com/api/webhooks/123456789/abcdef...`
+4. Convert to Apprise format: `discord://123456789/abcdef...` (drop `https://discord.com/api/webhooks/` and replace `/` between ID and token with `/`)
+
+> Apprise supports 90+ notification services (Telegram, Slack, email, etc.). See [Apprise docs](https://github.com/caronc/apprise) for other formats.
+
+---
+
+## 3. Deploy the Bot
+
+### Prerequisites
+
+- **Container Manager** installed from **Package Center** (called "Docker" on DSM 6.x)
+
+### Copy Files to NAS
+
+Copy the project folder to your NAS via **File Station** (drag and drop), SMB share, or SCP:
+
+```bash
+# SMB (from your Mac, if the NAS share is mounted)
+cp -r "/path/to/scout-report" /Volumes/your-nas-share/docker/scout-report/
+
+# Or SCP
+scp -r "/path/to/scout-report" admin@NAS_IP:/volume1/docker/scout-report/
+```
+
+### Configure docker-compose.yaml
+
+Open `docker-compose.yaml` in **File Station** (right-click → **Open with Text Editor**) and fill in your values:
+
+#### Calendars
+
+```yaml
+CALENDAR_1_URL: "https://p60-caldav.icloud.com/published/2/YOUR_ID"
+CALENDAR_1_LABEL: "Personal"
+CALENDAR_2_URL: "https://outlook.office365.com/owa/calendar/YOUR_ID/calendar.ics"
+CALENDAR_2_LABEL: "Work"
+```
+
+Up to 9 numbered slots (`CALENDAR_1` through `CALENDAR_9`).
+
+#### Timezone
+
+```yaml
+TZ: "America/Los_Angeles"
+```
+
+Set to your [IANA timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones). Controls when digests fire and how event times are displayed.
+
+#### Notifications
+
+```yaml
+APPRISE_URL: "discord://webhook_id/webhook_token"
+WEEKNIGHT_SCHEDULE: "sun,mon,tue,wed,thu 20:00"
+WEEKEND_SCHEDULE: "thu 16:00"
+NOON_SCHEDULE: "off"
+WORK_LABELS: "Work"
+```
+
+- **`APPRISE_URL`** — Required. Your Discord webhook in Apprise format (see step 2).
+- **`WEEKNIGHT_SCHEDULE`** — Tomorrow's work events. Default fires Sun–Thu at 8 PM.
+- **`WEEKEND_SCHEDULE`** — Fri–Sun preview. Default fires Thursday at 4 PM.
+- **`NOON_SCHEDULE`** — Midday brief (only fires if tomorrow has work events). Off by default.
+- **`WORK_LABELS`** — Must match a `CALENDAR_N_LABEL` value. Controls which calendars appear in weeknight + noon digests. Weekend preview shows all calendars.
+
+At least one schedule must be enabled.
+
+#### Minimum required values
+
+```yaml
+CALENDAR_1_URL: "https://your-calendar-url.ics"
+CALENDAR_1_LABEL: "Personal"
+APPRISE_URL: "discord://webhook_id/webhook_token"
+TZ: "America/New_York"
+WEEKNIGHT_SCHEDULE: "sun,mon,tue,wed,thu 20:00"
+```
+
+### Build and Start (Container Manager)
+
+1. Open **Container Manager → Project → Create**
+2. **Project Name:** `scout-report`
+3. **Path:** Select the folder where you copied the files (e.g. `/docker/scout-report`)
+4. **Source:** Choose **Use existing docker-compose.yml** — Container Manager will detect the `docker-compose.yaml` in the folder
+5. Click through the wizard and **Done**
+6. When prompted, choose **Start the project**
+
+> **Updating after code or config changes:** Go to **Project → select scout-report → Action → Build**, then **Action → Start**.
+
+### Check Logs
+
+**Container Manager → Project → scout-report → Details → Containers → select scout_report → Details → Log**
+
+Or via SSH:
+
+```bash
+docker compose logs -f scout-report
+```
+
+You should see:
+
+```
+Loaded 2 calendar(s): Personal, Work
+  Work calendars: Work
+  Personal calendars: Personal
+────────────────────────────────────────
+  Notifications: enabled
+  Timezone: America/New_York
+────────────────────────────────────────
+  Weeknight digest: sun,mon,tue,wed,thu at 20:00
+  Weekend preview: thu at 16:00
+Starting scheduler...
+Scout Report started. Scheduler running.
+```
+
+### Auto-Restart on Reboot
+
+Already configured — `docker-compose.yaml` has `restart: always`. Container Manager restarts the container automatically after a NAS reboot or DSM update.
+
+---
+
+## 4. Verify Notifications
+
+The easiest way to test: temporarily set a schedule to fire in 1–2 minutes.
+
+```yaml
+WEEKNIGHT_SCHEDULE: "mon,tue,wed,thu,fri,sat,sun 14:35"  # fire at 2:35 PM every day
+```
+
+Rebuild in Container Manager (**Action → Build** then **Action → Start**), wait for the scheduled time, and check your Discord channel. Then revert to your preferred schedule.
+
+---
+
+## 5. Troubleshooting
+
+| Problem | Solution |
+|---|---|
+| Project won't build | Check **Project → Details → Containers → Log** — likely a placeholder still in `docker-compose.yaml` |
+| Container exits immediately | Check the container log — common causes: no calendar URLs, `APPRISE_URL` missing, all schedules `off` |
+| No notifications arriving | Verify `APPRISE_URL` is correct and at least one schedule is not `off`. Check logs for "notification failed to send" |
+| Wrong notification times | Check `TZ` is set correctly. Schedule times use 24-hour format |
+| Weeknight digest says "No meetings" | `WORK_LABELS` must match a `CALENDAR_N_LABEL` exactly (case-sensitive) |
+
+---
+
+## 6. DS416play Notes
+
+- **CPU:** Intel Atom CE5335 (x86_64) — standard Docker images work, no ARM compatibility issues
+- **RAM:** 512 MB — the bot uses ~60 MB, well within limits (container capped at 256 MB)
+- **DSM version:** Requires DSM 7.x for Container Manager. DSM 6.x uses the older "Docker" package (same steps, slightly different UI)
+- **Resource usage:** The bot is I/O-bound (HTTPS calls to calendar feeds and webhooks). CPU and memory usage is minimal
+
+---
+
+## 7. Schedule Reference
+
+| Schedule | What it sends | Default timing |
+|---|---|---|
+| `WEEKNIGHT_SCHEDULE` | Tomorrow's work events (filtered by `WORK_LABELS`) | Sun–Thu at 20:00 |
+| `NOON_SCHEDULE` | Tomorrow's work events — **only fires if events exist** | Sun–Thu at 12:00 |
+| `WEEKEND_SCHEDULE` | Fri/Sat/Sun events from all calendars, grouped by day | Thu at 16:00 |
+
+Format: `"days HH:MM"` — days are comma-separated APScheduler names (`mon,tue,wed,thu,fri,sat,sun`). Use `"off"` to disable.
+# NAS Deployment Guide
+
 Deployment guide for running the bot container 24/7 on a **Synology NAS** (DSM 7.x with Container Manager).
 
 The recommended setup uses **Gemini** (Google's cloud LLM) — just an API key, no GPU, no second machine. If you prefer fully local/private inference, see [Appendix: Ollama on MacBook](#appendix-ollama-on-macbook-optional) at the bottom.
