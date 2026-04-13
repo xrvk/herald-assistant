@@ -836,7 +836,7 @@ def _prepare_ollama_messages(system_prompt, question, history, num_ctx):
     return messages, num_ctx
 
 def ask_llm(question, calendar_context, include_past=False, history=None):
-    """Send a question + calendar context to Ollama and return the response."""
+    """Send a question + calendar context to Ollama and return (response, model_name)."""
     num_ctx = _OLLAMA_CTX_WITH_PAST if include_past else _OLLAMA_CTX_BASE
     system_prompt = f"{SYSTEM_PROMPT}\n\nCALENDAR DATA:\n{calendar_context}"
     messages, num_ctx = _prepare_ollama_messages(system_prompt, question, history, num_ctx)
@@ -858,21 +858,22 @@ def ask_llm(question, calendar_context, include_past=False, history=None):
             timeout=120,
         )
         resp.raise_for_status()
-        return resp.json()["message"]["content"]
+        return resp.json()["message"]["content"], OLLAMA_MODEL
     except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
         is_timeout = isinstance(e, requests.exceptions.Timeout)
         if _gemini_api_key:
             reason = "timed out" if is_timeout else "offline"
             print(f"[LLM] Ollama {reason} — one-time fallback to Gemini ({get_gemini_model()})")
             return ask_gemini(question, calendar_context, history=history)
-        return _ERR_OLLAMA_TIMEOUT if is_timeout else _ERR_OLLAMA_OFFLINE
+        return (_ERR_OLLAMA_TIMEOUT if is_timeout else _ERR_OLLAMA_OFFLINE), None
     except Exception as e:
         print(f"LLM error: {e}")
-        return _ERR_LLM_GENERIC
+        return _ERR_LLM_GENERIC, None
 
 def ask_gemini(question, calendar_context, history=None):
-    """Send a question + calendar context to Gemini and return the response."""
+    """Send a question + calendar context to Gemini and return (response, model_name)."""
     from google.genai import types
+    model = get_gemini_model()
     system_prompt = f"{SYSTEM_PROMPT}\n\nCALENDAR DATA:\n{calendar_context}"
     # Build multi-turn contents list
     contents = []
@@ -883,7 +884,7 @@ def ask_gemini(question, calendar_context, history=None):
     contents.append(types.Content(role="user", parts=[types.Part(text=question)]))
     try:
         resp = _get_gemini_client().models.generate_content(
-            model=get_gemini_model(),
+            model=model,
             contents=contents,
             config={
                 "system_instruction": system_prompt,
@@ -893,20 +894,20 @@ def ask_gemini(question, calendar_context, history=None):
         )
         text = resp.text
         if text:
-            return text
-        return _ERR_NO_RESPONSE
+            return text, model
+        return _ERR_NO_RESPONSE, None
     except Exception as e:
         error_msg = str(e).lower()
         if "429" in error_msg or "resource_exhausted" in error_msg:
             print(f"Gemini rate limited — returning error to user")
-            return _ERR_GEMINI_RATE_LIMIT
+            return _ERR_GEMINI_RATE_LIMIT, None
         if "api key" in error_msg or "401" in error_msg or "403" in error_msg:
-            return _ERR_GEMINI_AUTH
+            return _ERR_GEMINI_AUTH, None
         print(f"Gemini error: {e}")
-        return _ERR_LLM_GENERIC
+        return _ERR_LLM_GENERIC, None
 
 def ask_backend(question, calendar_context, include_past=False, history=None):
-    """Route LLM calls to the configured backend."""
+    """Route LLM calls to the configured backend. Returns (response, model_name)."""
     if get_backend() == "gemini":
         return ask_gemini(question, calendar_context, history=history)
     return ask_llm(question, calendar_context, include_past, history=history)
@@ -1546,16 +1547,14 @@ async def on_message(message):
                 print(f"[Conv] Including {len(history)} previous exchange(s)")
             # Run blocking calendar fetch + LLM call in a thread
             calendar_context = await asyncio.to_thread(build_context, include_past)
-            answer = await asyncio.to_thread(ask_backend, question, calendar_context, include_past, history)
+            answer, model_used = await asyncio.to_thread(ask_backend, question, calendar_context, include_past, history)
 
         # Store exchange for future follow-ups (without signature)
         _store_exchange(hist_chan, message.author.id, question, answer)
 
         print(f"[Chat] Reply ({len(answer)} chars): {answer[:100]}...")
-        # Sign the reply with the active model
-        backend = get_backend()
-        model_name = get_gemini_model() if backend == 'gemini' else OLLAMA_MODEL
-        signature = f"\n*— {model_name}*"
+        # Sign the reply with the model that actually generated it
+        signature = f"\n*— {model_used}*" if model_used else ""
         # Discord has a 2000 char limit; fit truncation + signature if needed
         if len(answer) + len(signature) > _DISCORD_MSG_LIMIT:
             trunc = "\n…(truncated)"

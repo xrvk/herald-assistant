@@ -85,6 +85,8 @@ from main import (
     ask_gemini,
     get_backend,
     set_backend,
+    get_gemini_model,
+    OLLAMA_MODEL,
     SYSTEM_PROMPT,
     _HELP_TEXT,
     _LLM_SWITCH_MAP,
@@ -429,10 +431,11 @@ class TestBackendLogic:
 
         with patch.object(req, "post", side_effect=req.exceptions.ConnectionError("refused")), \
              patch.object(main, "_gemini_api_key", "fake-key"), \
-             patch.object(main, "ask_gemini", return_value="fallback answer") as mock_gemini:
-            result = main.ask_llm("what's tomorrow?", "some context")
+             patch.object(main, "ask_gemini", return_value=("fallback answer", "gemini-2.5-flash-lite")) as mock_gemini:
+            answer, model = main.ask_llm("what's tomorrow?", "some context")
         mock_gemini.assert_called_once_with("what's tomorrow?", "some context", history=None)
-        assert result == "fallback answer"
+        assert answer == "fallback answer"
+        assert model == "gemini-2.5-flash-lite"
 
     def test_ollama_offline_without_gemini_key(self):
         """When Ollama is unreachable and no GEMINI_API_KEY, ask_llm returns offline message."""
@@ -441,8 +444,9 @@ class TestBackendLogic:
 
         with patch.object(req, "post", side_effect=req.exceptions.ConnectionError("refused")), \
              patch.object(main, "_gemini_api_key", ""):
-            result = main.ask_llm("what's tomorrow?", "some context")
-        assert result == "🔌 LLM is offline — Ollama may not be running or is unreachable."
+            answer, model = main.ask_llm("what's tomorrow?", "some context")
+        assert answer == "🔌 LLM is offline — Ollama may not be running or is unreachable."
+        assert model is None
 
     def test_ollama_fallback_passes_history(self):
         """Fallback to Gemini forwards the conversation history."""
@@ -452,10 +456,11 @@ class TestBackendLogic:
         history = [("prev q", "prev a")]
         with patch.object(req, "post", side_effect=req.exceptions.ConnectionError("refused")), \
              patch.object(main, "_gemini_api_key", "fake-key"), \
-             patch.object(main, "ask_gemini", return_value="gemini reply") as mock_gemini:
-            result = main.ask_llm("follow-up", "ctx", history=history)
+             patch.object(main, "ask_gemini", return_value=("gemini reply", "gemini-2.5-flash-lite")) as mock_gemini:
+            answer, model = main.ask_llm("follow-up", "ctx", history=history)
         mock_gemini.assert_called_once_with("follow-up", "ctx", history=history)
-        assert result == "gemini reply"
+        assert answer == "gemini reply"
+        assert model == "gemini-2.5-flash-lite"
 
 
 
@@ -605,26 +610,30 @@ class TestAskLlmErrors:
 
     def test_connection_error(self):
         with patch("main.requests.post", side_effect=requests.exceptions.ConnectionError):
-            result = ask_llm("q", "cal context")
-            assert result == _ERR_OLLAMA_OFFLINE
+            answer, model = ask_llm("q", "cal context")
+            assert answer == _ERR_OLLAMA_OFFLINE
+            assert model is None
 
     def test_timeout_error(self):
         with patch("main.requests.post", side_effect=requests.exceptions.Timeout):
-            result = ask_llm("q", "cal context")
-            assert result == _ERR_OLLAMA_TIMEOUT
+            answer, model = ask_llm("q", "cal context")
+            assert answer == _ERR_OLLAMA_TIMEOUT
+            assert model is None
 
     def test_generic_error(self):
         with patch("main.requests.post", side_effect=RuntimeError("unexpected")):
-            result = ask_llm("q", "cal context")
-            assert result == _ERR_LLM_GENERIC
+            answer, model = ask_llm("q", "cal context")
+            assert answer == _ERR_LLM_GENERIC
+            assert model is None
 
     def test_success(self):
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
         mock_resp.json.return_value = {"message": {"content": "Here's your schedule"}}
         with patch("main.requests.post", return_value=mock_resp):
-            result = ask_llm("q", "cal context")
-            assert result == "Here's your schedule"
+            answer, model = ask_llm("q", "cal context")
+            assert answer == "Here's your schedule"
+            assert model == OLLAMA_MODEL
 
 
 class TestAskGeminiErrors:
@@ -643,38 +652,44 @@ class TestAskGeminiErrors:
     def test_rate_limit(self):
         mock_client = self._mock_gemini(side_effect=Exception("429 resource_exhausted"))
         with patch("main._get_gemini_client", return_value=mock_client):
-            result = ask_gemini("q", "cal context")
-            assert result == _ERR_GEMINI_RATE_LIMIT
+            answer, model = ask_gemini("q", "cal context")
+            assert answer == _ERR_GEMINI_RATE_LIMIT
+            assert model is None
 
     def test_auth_error(self):
         mock_client = self._mock_gemini(side_effect=Exception("401 api key invalid"))
         with patch("main._get_gemini_client", return_value=mock_client):
-            result = ask_gemini("q", "cal context")
-            assert result == _ERR_GEMINI_AUTH
+            answer, model = ask_gemini("q", "cal context")
+            assert answer == _ERR_GEMINI_AUTH
+            assert model is None
 
     def test_generic_error(self):
         mock_client = self._mock_gemini(side_effect=Exception("something broke"))
         with patch("main._get_gemini_client", return_value=mock_client):
-            result = ask_gemini("q", "cal context")
-            assert result == _ERR_LLM_GENERIC
+            answer, model = ask_gemini("q", "cal context")
+            assert answer == _ERR_LLM_GENERIC
+            assert model is None
 
     def test_empty_response(self):
         mock_client = self._mock_gemini(text=None)
         with patch("main._get_gemini_client", return_value=mock_client):
-            result = ask_gemini("q", "cal context")
-            assert result == _ERR_NO_RESPONSE
+            answer, model = ask_gemini("q", "cal context")
+            assert answer == _ERR_NO_RESPONSE
+            assert model is None
 
     def test_success(self):
         mock_client = self._mock_gemini(text="Here's your schedule")
         with patch("main._get_gemini_client", return_value=mock_client):
-            result = ask_gemini("q", "cal context")
-            assert result == "Here's your schedule"
+            answer, model = ask_gemini("q", "cal context")
+            assert answer == "Here's your schedule"
+            assert model == get_gemini_model()
 
     def test_history_passed_to_gemini(self):
         mock_client = self._mock_gemini(text="follow-up answer")
         with patch("main._get_gemini_client", return_value=mock_client):
-            result = ask_gemini("q2", "cal", history=[("q1", "a1")])
-            assert result == "follow-up answer"
+            answer, model = ask_gemini("q2", "cal", history=[("q1", "a1")])
+            assert answer == "follow-up answer"
+            assert model == get_gemini_model()
             call_args = mock_client.models.generate_content.call_args
             contents = call_args.kwargs.get("contents") or call_args[1].get("contents")
             # Should have history (user+model) + current question = 3 content items
