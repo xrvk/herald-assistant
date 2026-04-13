@@ -26,6 +26,18 @@ Healthy startup logs must include:
 - `Discord bot logged in as ...`
 - `Scheduler started.`
 
+## Scheduled Digests
+
+Three digest types, all configured via `"days HH:MM"` format or `"off"` to disable. `APPRISE_URL` required when any digest is enabled.
+
+| Digest | Env Var | Default | Description |
+|--------|---------|---------|-------------|
+| Weeknight | `WEEKNIGHT_SCHEDULE` | `off` | Tomorrow's work events (filtered by `WORK_LABELS`) |
+| Noon brief | `NOON_SCHEDULE` | `off` | Tomorrow's work events at midday — only fires if events exist |
+| Weekend preview | `WEEKEND_SCHEDULE` | `off` | Fri–Sun events grouped by day |
+
+`WORK_LABELS` = comma-separated calendar labels that count as "work" (used to filter weeknight/noon digests). Unlabelled calendars are treated as personal.
+
 ## Bot Commands
 
 All commands use `.` prefix. Smart-quote normalization for mobile keyboards.
@@ -34,9 +46,11 @@ All commands use `.` prefix. Smart-quote normalization for mobile keyboards.
 |---------|--------|
 | `.help` | Show available commands and example questions |
 | `.llm` | Show current backend + models |
-| `.llm [g\|o\|fl\|gf]` | Switch backend/model |
+| `.llm o` | Switch to Ollama |
+| `.llm fl` / `.llm gf` | Switch to Gemini flash-lite / flash |
 | `.cal` | List connected calendars |
-| `.ignore` / `.infoevent` | Manage event filters. `add <pattern>` / `remove <pattern>` / `remove all` / (no args = list) |
+| `.ignore` (`.ig`) | Manage ignore filter — hidden from AI. `add <pattern>` / `remove <pattern>` / `remove all` / (no args = list) |
+| `.infoevent` (`.ie`) | Manage info-event filter — visible to AI but tagged as informational. Same subcommands as `.ignore` |
 | `.demo` / `.demo off` | Activate/deactivate synthetic demo calendars from `demo/calendars.py` |
 | `.reboot` | Restart the bot process (`os.execv` self-restart; Docker `restart: always` as fallback) |
 
@@ -46,7 +60,7 @@ All commands use `.` prefix. Smart-quote normalization for mobile keyboards.
 
 ## Test Suite
 
-- `tests/test_unit.py` — 145 unit tests, no bot/network needed. Run: `pytest tests/test_unit.py -v`
+- `tests/test_unit.py` — 144 unit tests, no bot/network needed. Run: `pytest tests/test_unit.py -v`
 - `tests/test_integration.py` — live Discord integration tests (needs running bot + `.env`)
 - `tests/demo_calendars.py` — synthetic calendar generators (`generate_work_ics()`, `generate_personal_ics()`, `calendar_stats()`)
 - `run_tests.sh` — runner: `./run_tests.sh` (unit only), `./run_tests.sh --live` (unit + integration)
@@ -60,9 +74,10 @@ All commands use `.` prefix. Smart-quote normalization for mobile keyboards.
 - `google-genai` is imported lazily inside `_get_gemini_client()`, not at module top — missing package won't error until Gemini is actually used.
 - Discord replies truncated at 1900 chars (2000 limit). Scheduled digests require `APPRISE_URL`.
 - `HISTORY_DAYS=0` disables past-event classification entirely. Cache TTLs are in seconds (default 3600).
+- `USER_RATE_LIMIT_SEC` (default 5) — minimum seconds between LLM requests per user. Set to 0 to disable.
 - At least one calendar URL must be configured or startup crashes.
 - Startup prints a summary banner (LLM backend, calendars, schedules, history config).
 - Timeouts are hard-coded: calendar fetch 30s (with 1 retry + 2s backoff on transient errors), Ollama chat 120s, classification 15s.
 - `MAX_OUTPUT_TOKENS` configurable via env var (default 512).
-- Event filters persisted in `filters.json`. `IGNORED_EVENTS`/`INFO_EVENTS` env vars are optional seeds merged at startup. Info events are visible to AI but tagged as informational.
+- Event filters persisted in `filters.json` (`FILTERS_PATH` env var). `IGNORED_EVENTS`/`INFO_EVENTS` env vars are optional seeds merged at startup. Ignored events are hidden from AI; info events are visible but tagged as informational. Both managed at runtime via `.ignore`/`.infoevent`.
 - Graceful shutdown: `atexit` cleans up `_cal_executor`; `run_scheduler_only()` handles SIGTERM/SIGINT.
