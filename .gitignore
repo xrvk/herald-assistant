@@ -4,3 +4,4 @@ __pycache__/
 .venv/
 filters.json
 .pytest_cache/
+data/

@@ -33,12 +33,12 @@ services:
       # Noon brief: off
       NOON_SCHEDULE: "${NOON_SCHEDULE:-off}"
 
-      WORK_LABELS: "${CALENDAR_2_LABEL:-Work}"
+      WORK_LABELS: "${WORK_LABELS}"
 
       # ── Discord Bot (optional) ─────────────────────────────────────
       # Enables online presence + .help/.cal/.schedule commands.
       # Leave empty for headless webhook-only mode.
-      DISCORD_TOKEN: ""
+      DISCORD_TOKEN: "${DISCORD_TOKEN}"
 
     volumes:
       - /volume1/docker/scout-report/data:/app/data
